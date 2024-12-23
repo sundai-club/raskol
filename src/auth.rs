@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn expired() {
         let opt = jwt::Options {
-            secret: "super secret".to_string(),
+            secret: "super-secret".to_string(),
             ..Default::default()
         };
 

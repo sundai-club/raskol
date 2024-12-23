@@ -1,36 +1,64 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::{Duration, Instant}};
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Response, Result},
     Json,
 };
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{auth, jwt};
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Payload {
+    messages: Vec<Message>,
+    model: Option<String>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Message {
+    role: String,
+    content: String,
+}
+
+#[derive(Clone)]
+struct GroqConfig {
+    api_key: String,
+    base_url: String,
+}
+
+impl GroqConfig {
+    fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            base_url: "https://api.groq.com/openai/v1/chat/completions".to_string(),
+        }
+    }
+}
+
 #[tracing::instrument(name = "server")]
-pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options) -> anyhow::Result<()> {
+pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options, groq_api_key: String) -> anyhow::Result<()> {
     let hits = Hits::new();
+    let groq_config = GroqConfig::new(groq_api_key);
+    
     tracing::info!("Starting.");
     let routes = axum::Router::new()
         .route(
-            "/api",
-            axum::routing::post({
-                let hits = hits.clone();
-                move |payload| handle(hits, payload)
-            })
-            .get({
-                let hits = hits.clone();
-                move || dump(hits)
-            }),
+            "/api/chat",
+            axum::routing::post(handle_chat),
         )
         .route_layer(middleware::from_fn({
             let jwt_opts = jwt_opts.clone();
             move |req, next| auth_layer(jwt_opts.clone(), req, next)
-        }));
+        }))
+        .with_state((hits, groq_config));
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening.");
     axum::serve(listener, routes).await?;
@@ -38,40 +66,81 @@ pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options) -> anyhow::Result<()
 }
 
 #[tracing::instrument(skip_all)]
-async fn handle(hits: Hits, _payload: Json<Payload>) -> Result<StatusCode> {
+async fn handle_chat(
+    State((hits, config)): State<(Hits, GroqConfig)>,
+    payload: Json<Payload>,
+) -> Result<Json<Value>, StatusCode> {
     let u = USER.get();
-    tracing::debug!(user = ?u, "Handling.");
-    hits.hit(u.uid);
-    Ok(StatusCode::OK)
+    tracing::debug!(user = ?u, "Handling chat request.");
+    
+    hits.hit(u.uid)?;
+    
+    let groq_payload = serde_json::json!({
+        "messages": payload.messages,
+        "model": payload.model.as_deref().unwrap_or("mixtral-8x7b-32768"),
+        "temperature": payload.temperature.unwrap_or(0.7),
+        "max_tokens": payload.max_tokens.unwrap_or(2048),
+    });
+
+    let response = reqwest::Client::new()
+        .post(&config.base_url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .json(&groq_payload)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Groq API request failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let groq_response = response.json::<Value>().await.map_err(|e| {
+        tracing::error!("Failed to parse Groq response: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(groq_response))
 }
 
-#[tracing::instrument(skip_all)]
-async fn dump(hits: Hits) -> Result<Json<Option<usize>>, StatusCode> {
-    let u = USER.get();
-    tracing::debug!(user = ?u, "Dumping.");
-    Ok(Json(hits.get(&u.uid)))
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Payload {}
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct Hits {
     per_user: Arc<DashMap<String, usize>>,
+    rate_limits: Arc<DashMap<String, Instant>>,
 }
 
 impl Hits {
     fn new() -> Self {
-        Self::default()
+        Self {
+            per_user: Arc::new(DashMap::new()),
+            rate_limits: Arc::new(DashMap::new()),
+        }
     }
 
-    fn hit(&self, uid: String) {
+    fn check_rate_limit(&self, uid: &str) -> bool {
+        const RATE_LIMIT_DURATION: Duration = Duration::from_secs(60); // 1 request per minute
+        
+        let now = Instant::now();
+        if let Some(last_hit) = self.rate_limits.get(uid) {
+            if now.duration_since(*last_hit) < RATE_LIMIT_DURATION {
+                return false;
+            }
+        }
+        self.rate_limits.insert(uid.to_string(), now);
+        true
+    }
+
+    fn hit(&self, uid: String) -> Result<(), StatusCode> {
+        if !self.check_rate_limit(&uid) {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        
         self.per_user
             .entry(uid)
             .and_modify(|count| *count += 1)
             .or_insert(1);
+        Ok(())
     }
 
+    #[allow(dead_code)]
     fn get(&self, uid: &str) -> Option<usize> {
         self.per_user.get(uid).map(|count| *count)
     }
@@ -95,8 +164,18 @@ async fn auth_layer(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
+        .and_then(|auth_str| {
+            // Extract token from "Bearer <token>"
+            if auth_str.starts_with("Bearer ") {
+                Some(auth_str[7..].to_string())
+            } else {
+                tracing::debug!("Invalid Authorization header format");
+                None
+            }
+        })
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if let Some(user) = authorize(auth_token, &jwt_opts).await {
+
+    if let Some(user) = authorize(&auth_token, &jwt_opts).await {
         Ok(USER.scope(user, next.run(req)).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)
@@ -109,3 +188,6 @@ async fn authorize(auth_token: &str, jwt_opts: &jwt::Options) -> Option<User> {
         .ok()
         .map(|claims| User { uid: claims.sub })
 }
+
+#[cfg(test)]
+mod tests;

@@ -30,6 +30,7 @@ struct Cli {
 
     #[clap(subcommand)]
     cmd: Cmd,
+    groq_api_key: String,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -51,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         issuer: cli.jwt_issuer.to_string(),
     };
     match &cli.cmd {
-        Cmd::Server => raskol::server::run(addr, &jwt_opts).await,
+        Cmd::Server => raskol::server::run(addr, &jwt_opts, cli.groq_api_key).await,
         Cmd::Jwt { uid, ttl } => {
             let claims = raskol::auth::Claims::new(uid, Duration::from_secs_f64(*ttl))?;
             let encoded: String = claims.to_str(&jwt_opts)?;
