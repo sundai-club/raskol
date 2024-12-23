@@ -54,16 +54,17 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
 async fn handle(
     hits: Hits,
     Path(endpoint): Path<String>,
-    payload: Json<Payload>,
+    payload: Json<serde_json::Value>,
 ) -> Result<Response<String>, StatusCode> {
-    // TODO Don't spec payload. Just verify it is JSON.
-    tracing::debug!(?payload, "Handling.");
-    let u = USER.get();
-    hits.hit(u.uid);
-    let url = format!("https://api.groq.com/{endpoint}");
+    let user: User = USER.get();
+    hits.hit(&user.uid);
+    tracing::debug!(hits = hits.get(&user.uid), "Handling.");
+    let address = "api.groq.com"; // TODO Move to conf.
+    let url = format!("https://{address}/{endpoint}");
     let resp = reqwest::Client::new()
         .post(url)
         .bearer_auth(
+            // TODO Move to conf.
             "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",
         )
         .json(&payload.0)
@@ -117,18 +118,6 @@ async fn dump(hits: Hits) -> Result<Json<Option<usize>>, StatusCode> {
     Ok(Json(hits.get(&u.uid)))
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Payload {
-    messages: Vec<Msg>,
-    model: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Msg {
-    role: String,
-    content: String,
-}
-
 #[derive(Clone, Debug, Default)]
 struct Hits {
     per_user: Arc<DashMap<String, usize>>,
@@ -139,9 +128,9 @@ impl Hits {
         Self::default()
     }
 
-    fn hit(&self, uid: String) {
+    fn hit(&self, uid: &str) {
         self.per_user
-            .entry(uid)
+            .entry(uid.to_string())
             .and_modify(|count| *count += 1)
             .or_insert(1);
     }
