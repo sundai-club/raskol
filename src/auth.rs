@@ -1,5 +1,7 @@
 use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
+use crate::conf::ConfJwt;
+
 use super::jwt;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
@@ -16,12 +18,12 @@ impl Claims {
         Ok(Self { sub, exp })
     }
 
-    pub fn to_str(&self, jwt_opts: &jwt::Options) -> jwt::Result<String> {
-        jwt::encode(self, jwt_opts)
+    pub fn to_str(&self, jwt_conf: &ConfJwt) -> jwt::Result<String> {
+        jwt::encode(self, jwt_conf)
     }
 
-    pub fn from_str(str: &str, jwt_opts: &jwt::Options) -> jwt::Result<Self> {
-        jwt::decode::<Self>(str, jwt_opts)
+    pub fn from_str(str: &str, jwt_conf: &ConfJwt) -> jwt::Result<Self> {
+        jwt::decode::<Self>(str, jwt_conf)
     }
 }
 
@@ -31,26 +33,16 @@ mod tests {
 
     use jsonwebtoken::errors::ErrorKind;
 
-    use crate::jwt;
+    use crate::conf::ConfJwt;
 
     use super::Claims;
 
     #[test]
     fn good() {
         let claims = Claims::new("foo", Duration::from_secs(5)).unwrap();
-
-        let secret = "super-secret".to_string();
-        let audience = "".to_string();
-        let issuer = "".to_string();
-        let opt = jwt::Options {
-            secret,
-            audience,
-            issuer,
-        };
-
-        let encoded: String = claims.to_str(&opt).unwrap();
-        let decoded = Claims::from_str(&encoded, &opt).unwrap();
-
+        let conf = ConfJwt::default();
+        let encoded: String = claims.to_str(&conf).unwrap();
+        let decoded = Claims::from_str(&encoded, &conf).unwrap();
         assert_eq!(&claims, &decoded);
     }
 
@@ -58,21 +50,14 @@ mod tests {
     fn bad_key() {
         let claims = Claims::new("foo", Duration::from_secs(5)).unwrap();
 
-        let secret_good = "super secret";
-        let secret_bad = secret_good.to_string() + " naughty";
-        let opt_good = jwt::Options {
-            secret: secret_good.to_string(),
-            audience: "".to_string(),
-            issuer: "".to_string(),
-        };
-        let opt_bad = jwt::Options {
-            secret: secret_bad.to_string(),
-            audience: "".to_string(),
-            issuer: "".to_string(),
+        let conf_good = ConfJwt::default();
+        let conf_bad = ConfJwt {
+            secret: conf_good.secret.to_string() + "naughty",
+            ..conf_good.clone()
         };
 
-        let encoded: String = claims.to_str(&opt_good).unwrap();
-        let decode_result = Claims::from_str(&encoded, &opt_bad);
+        let encoded: String = claims.to_str(&conf_good).unwrap();
+        let decode_result = Claims::from_str(&encoded, &conf_bad);
 
         assert!(matches!(
             decode_result,
@@ -82,7 +67,7 @@ mod tests {
 
     #[test]
     fn expired() {
-        let opt = jwt::Options {
+        let conf = ConfJwt {
             secret: "super secret".to_string(),
             ..Default::default()
         };
@@ -90,8 +75,8 @@ mod tests {
         let mut claims = Claims::new("foo", Duration::ZERO).unwrap();
         claims.exp -= 10; // Expire arbitrarily-far back in the past.
 
-        let encoded: String = claims.to_str(&opt).unwrap();
-        let decode_result = Claims::from_str(&encoded, &opt);
+        let encoded: String = claims.to_str(&conf).unwrap();
+        let decode_result = Claims::from_str(&encoded, &conf);
         dbg!(&decode_result);
 
         assert!(matches!(

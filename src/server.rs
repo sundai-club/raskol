@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
-    extract::Request,
+    extract::{Path, Request},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Response, Result},
@@ -9,18 +9,22 @@ use axum::{
 };
 use dashmap::DashMap;
 
-use crate::{auth, jwt};
+use crate::{
+    auth,
+    conf::{Conf, ConfJwt},
+};
 
 #[tracing::instrument(name = "server")]
-pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options) -> anyhow::Result<()> {
+pub async fn run(conf: &Conf) -> anyhow::Result<()> {
+    tracing::info!(?conf, "Starting.");
+    let addr = SocketAddr::from((conf.addr, conf.port));
     let hits = Hits::new();
-    tracing::info!("Starting.");
     let routes = axum::Router::new()
         .route(
-            "/api",
+            "/*endpoint",
             axum::routing::post({
                 let hits = hits.clone();
-                move |payload| handle(hits, payload)
+                move |endpoint, payload| handle(hits, endpoint, payload)
             })
             .get({
                 let hits = hits.clone();
@@ -28,8 +32,9 @@ pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options) -> anyhow::Result<()
             }),
         )
         .route_layer(middleware::from_fn({
-            let jwt_opts = jwt_opts.clone();
-            move |req, next| auth_layer(jwt_opts.clone(), req, next)
+            // TODO Arc instead of clone.
+            let jwt_conf = conf.jwt.clone();
+            move |req, next| auth_layer(jwt_conf.clone(), req, next)
         }));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening.");
@@ -38,30 +43,50 @@ pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options) -> anyhow::Result<()
 }
 
 #[tracing::instrument(skip_all)]
-async fn handle(hits: Hits, payload: Json<Payload>) -> Result<StatusCode> {
+async fn handle(
+    hits: Hits,
+    Path(endpoint): Path<String>,
+    payload: Json<Payload>,
+) -> Result<Response<String>, StatusCode> {
     let u = USER.get();
     tracing::debug!(user = ?u, ?payload, "Handling.");
     hits.hit(u.uid);
-    let resp_result = reqwest::Client::new()
-        .post("https://api.groq.com/openai/v1/chat/completions")
+    let url = format!("https://api.groq.com/{endpoint}");
+    let resp = reqwest::Client::new()
+        .post(url)
+        .bearer_auth("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")
         .json(&payload.0)
         .send()
-        .await;
-    // TODO Revise status codes.
-    match resp_result {
-        Ok(resp) => {
-            let code = resp.status().as_u16();
-            let code = StatusCode::from_u16(code).unwrap_or_else(|error| {
-                tracing::error!(?error, ?code, "Failed to convert status code.");
-                StatusCode::INTERNAL_SERVER_ERROR
-            });
-            Ok(code)
-        }
-        Err(error) => {
+        .await
+        .map_err(|error| {
             tracing::error!(?error, "Failed to make the external request.");
-            Ok(StatusCode::SERVICE_UNAVAILABLE)
-        }
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+    if !resp.status().is_success() {
+        tracing::error!(?resp, "External request rejected.");
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
+    let code = resp.status().as_u16();
+    let code = StatusCode::from_u16(code).map_err(|error| {
+        tracing::error!(?error, ?code, "Failed to convert status code.");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let body = resp.text().await.map_err(|error| {
+        tracing::error!(?error, ?code, "Failed to receive body from target host.");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+    if is_json(&body) {
+        Response::builder()
+            .status(code)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+    } else {
+        Response::builder().status(code).body(body)
+    }
+    .map_err(|error| {
+        tracing::error!(?error, ?code, "Failed to build response.");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 #[tracing::instrument(skip_all)]
@@ -114,26 +139,26 @@ tokio::task_local! {
     pub static USER: User;
 }
 
-async fn auth_layer(
-    jwt_opts: jwt::Options,
-    req: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
+async fn auth_layer(jwt_conf: ConfJwt, req: Request, next: Next) -> Result<Response, StatusCode> {
     let auth_token = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if let Some(user) = authorize(auth_token, &jwt_opts).await {
+    if let Some(user) = authorize(auth_token, &jwt_conf).await {
         Ok(USER.scope(user, next.run(req)).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
 }
 
-async fn authorize(auth_token: &str, jwt_opts: &jwt::Options) -> Option<User> {
-    auth::Claims::from_str(auth_token, jwt_opts)
+async fn authorize(auth_token: &str, jwt_conf: &ConfJwt) -> Option<User> {
+    auth::Claims::from_str(auth_token, jwt_conf)
         .inspect_err(|error| tracing::debug!(?error, "Auth failed."))
         .ok()
         .map(|claims| User { uid: claims.sub })
+}
+
+fn is_json(s: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(s).is_ok()
 }
