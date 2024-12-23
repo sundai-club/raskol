@@ -18,9 +18,9 @@ impl Default for Conf {
     fn default() -> Self {
         Self {
             log_level: tracing::Level::INFO,
-            addr: "127.0.0.1"
-                .parse()
-                .unwrap_or_else(|_| unreachable!("Fat-fingered default IP address!")),
+            addr: "127.0.0.1".parse().unwrap_or_else(|_| {
+                unreachable!("Fat-fingered default IP address!")
+            }),
             port: 3001,
             jwt: ConfJwt::default(),
         }
@@ -54,7 +54,10 @@ impl Debug for ConfJwt {
     }
 }
 
-fn serialize_log_level<S>(level: &tracing::Level, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_log_level<S>(
+    level: &tracing::Level,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -62,7 +65,9 @@ where
     serializer.serialize_str(&s)
 }
 
-fn deserialize_log_level<'de, D>(deserializer: D) -> Result<tracing::Level, D::Error>
+fn deserialize_log_level<'de, D>(
+    deserializer: D,
+) -> Result<tracing::Level, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -77,7 +82,9 @@ pub fn read_or_create_default() -> anyhow::Result<Conf> {
     read_or_create_default_(path).context(path)
 }
 
-pub fn read_or_create_default_<P: AsRef<Path>>(path: P) -> anyhow::Result<Conf> {
+pub fn read_or_create_default_<P: AsRef<Path>>(
+    path: P,
+) -> anyhow::Result<Conf> {
     let path = path.as_ref();
     let conf = if fs::exists(path)? {
         let s = fs::read_to_string(path)?;

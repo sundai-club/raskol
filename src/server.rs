@@ -54,7 +54,9 @@ async fn handle(
     let url = format!("https://api.groq.com/{endpoint}");
     let resp = reqwest::Client::new()
         .post(url)
-        .bearer_auth("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")
+        .bearer_auth(
+            "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",
+        )
         .json(&payload.0)
         .send()
         .await
@@ -72,7 +74,11 @@ async fn handle(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     let body = resp.text().await.map_err(|error| {
-        tracing::error!(?error, ?code, "Failed to receive body from target host.");
+        tracing::error!(
+            ?error,
+            ?code,
+            "Failed to receive body from target host."
+        );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
     if is_json(&body) {
@@ -139,7 +145,11 @@ tokio::task_local! {
     pub static USER: User;
 }
 
-async fn auth_layer(jwt_conf: ConfJwt, req: Request, next: Next) -> Result<Response, StatusCode> {
+async fn auth_layer(
+    jwt_conf: ConfJwt,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     let auth_token = req
         .headers()
         .get(header::AUTHORIZATION)

@@ -33,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
     match &cli.cmd {
         Cmd::Server => raskol::server::run(&conf).await,
         Cmd::Jwt { uid, ttl } => {
-            let claims = raskol::auth::Claims::new(uid, Duration::from_secs_f64(*ttl))?;
+            let claims = raskol::auth::Claims::new(
+                uid,
+                Duration::from_secs_f64(*ttl),
+            )?;
             let encoded: String = claims.to_str(&conf.jwt)?;
             println!("{encoded}");
             Ok(())
@@ -42,7 +45,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn set_current_dir(path: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(path).context(format!("Failed to create directory path: {path:?}"))?;
-    env::set_current_dir(&path).context(format!("Failed to set current directory to {path:?}"))?;
+    fs::create_dir_all(path)
+        .context(format!("Failed to create directory path: {path:?}"))?;
+    env::set_current_dir(&path)
+        .context(format!("Failed to set current directory to {path:?}"))?;
     Ok(())
 }
