@@ -14,7 +14,7 @@ use crate::{
     conf::{Conf, ConfJwt},
 };
 
-#[tracing::instrument(name = "server")]
+#[tracing::instrument(name = "server", skip_all, fields(addr = ?conf.addr, port = conf.port))]
 pub async fn run(conf: &Conf) -> anyhow::Result<()> {
     tracing::info!(?conf, "Starting.");
     let addr = SocketAddr::from((conf.addr, conf.port));
@@ -33,7 +33,10 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
             }),
         )
         .route_layer(middleware::from_fn({
-            move |req, next| auth_layer(jwt_conf.clone(), req, next)
+            move |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
+        }))
+        .route_layer(middleware::from_fn({
+            move |req, next: Next| auth_layer(jwt_conf.clone(), req, next)
         }));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening.");
@@ -41,14 +44,21 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(
+    skip_all,
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid
+    )
+)]
 async fn handle(
     hits: Hits,
     Path(endpoint): Path<String>,
     payload: Json<Payload>,
 ) -> Result<Response<String>, StatusCode> {
+    // TODO Don't spec payload. Just verify it is JSON.
+    tracing::debug!(?payload, "Handling.");
     let u = USER.get();
-    tracing::debug!(user = ?u, ?payload, "Handling.");
     hits.hit(u.uid);
     let url = format!("https://api.groq.com/{endpoint}");
     let resp = reqwest::Client::new()
@@ -94,10 +104,16 @@ async fn handle(
     })
 }
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(
+    skip_all,
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid
+    )
+)]
 async fn dump(hits: Hits) -> Result<Json<Option<usize>>, StatusCode> {
+    tracing::debug!("Dumping.");
     let u = USER.get();
-    tracing::debug!(user = ?u, "Dumping.");
     Ok(Json(hits.get(&u.uid)))
 }
 
@@ -140,8 +156,21 @@ struct User {
     pub uid: String,
 }
 
+#[derive(Debug, Clone)]
+struct ReqId {
+    pub req_id: String,
+}
+
+impl ReqId {
+    fn new() -> Self {
+        let req_id = cuid2::create_id();
+        Self { req_id }
+    }
+}
+
 tokio::task_local! {
     pub static USER: User;
+    pub static REQ_ID: ReqId;
 }
 
 async fn auth_layer(
@@ -157,6 +186,7 @@ async fn auth_layer(
     if let Some(user) = authorize(auth_token, &jwt_conf).await {
         Ok(USER.scope(user, next.run(req)).await)
     } else {
+        tracing::debug!(?req, "Invalid or missing authorization.");
         Err(StatusCode::UNAUTHORIZED)
     }
 }
