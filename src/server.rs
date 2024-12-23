@@ -19,13 +19,16 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
     tracing::info!(?conf, "Starting.");
     let addr = SocketAddr::from((conf.addr, conf.port));
     let hits = Hits::new();
-    let jwt_conf = Arc::new(conf.jwt.clone());
+    let conf = Arc::new(conf.clone());
     let routes = axum::Router::new()
         .route(
             "/*endpoint",
             axum::routing::post({
+                let conf = conf.clone();
                 let hits = hits.clone();
-                move |endpoint, payload| handle(hits, endpoint, payload)
+                move |endpoint, payload| {
+                    handle(conf.clone(), hits, endpoint, payload)
+                }
             })
             .get({
                 let hits = hits.clone();
@@ -36,7 +39,7 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
             move |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
         }))
         .route_layer(middleware::from_fn({
-            move |req, next: Next| auth_layer(jwt_conf.clone(), req, next)
+            move |req, next: Next| auth_layer(conf.clone(), req, next)
         }));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening.");
@@ -52,6 +55,7 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
     )
 )]
 async fn handle(
+    conf: Arc<Conf>,
     hits: Hits,
     Path(endpoint): Path<String>,
     payload: Json<serde_json::Value>,
@@ -59,14 +63,11 @@ async fn handle(
     let user: User = USER.get();
     hits.hit(&user.uid);
     tracing::debug!(hits = hits.get(&user.uid), "Handling.");
-    let address = "api.groq.com"; // TODO Move to conf.
+    let address = &conf.target_address;
     let url = format!("https://{address}/{endpoint}");
     let resp = reqwest::Client::new()
         .post(url)
-        .bearer_auth(
-            // TODO Move to conf.
-            "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",
-        )
+        .bearer_auth(&conf.target_auth_token)
         .json(&payload.0)
         .send()
         .await
@@ -163,7 +164,7 @@ tokio::task_local! {
 }
 
 async fn auth_layer(
-    jwt_conf: Arc<ConfJwt>,
+    conf: Arc<Conf>,
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -172,7 +173,7 @@ async fn auth_layer(
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if let Some(user) = authorize(auth_token, &jwt_conf).await {
+    if let Some(user) = authorize(auth_token, &conf.jwt).await {
         Ok(USER.scope(user, next.run(req)).await)
     } else {
         tracing::debug!(?req, "Invalid or missing authorization.");

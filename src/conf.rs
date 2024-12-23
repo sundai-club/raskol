@@ -12,6 +12,8 @@ pub struct Conf {
     pub addr: IpAddr,
     pub port: u16,
     pub jwt: ConfJwt,
+    pub target_address: String,
+    pub target_auth_token: String,
 }
 
 impl Default for Conf {
@@ -23,6 +25,8 @@ impl Default for Conf {
             }),
             port: 3001,
             jwt: ConfJwt::default(),
+            target_address: "api.groq.com".to_string(),
+            target_auth_token: String::new(),
         }
     }
 }
