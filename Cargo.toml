@@ -1,6 +1,12 @@
 [package]
 name = "raskol"
-version = "0.3.0"
+version = "0.3.1"
+description = "Share 1 API key with N group members without revealing it."
+authors = ["Siraaj Khandkar <siraaj@khandkar.net>"]
+keywords = ["photo", "organizer", "exif"]
+categories = ["command-line-utilities"]
+license = "BSD-3-Clause"
+readme = "README.md"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +14,7 @@ anyhow = { version = "1.0.95", features = ["backtrace"] }
 axum = "0.7.9"
 clap = { version = "4.5.23", features = ["derive"] }
 dashmap = "6.1.0"
+human-panic = "2.0.2"
 jsonwebtoken = "9.2.0"
 reqwest = { version = "0.12.9", features = ["json"] }
 serde = { version = "1.0.216", features = ["derive"] }
