@@ -19,6 +19,7 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
     tracing::info!(?conf, "Starting.");
     let addr = SocketAddr::from((conf.addr, conf.port));
     let hits = Hits::new();
+    let jwt_conf = Arc::new(conf.jwt.clone());
     let routes = axum::Router::new()
         .route(
             "/*endpoint",
@@ -32,8 +33,6 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
             }),
         )
         .route_layer(middleware::from_fn({
-            // TODO Arc instead of clone.
-            let jwt_conf = conf.jwt.clone();
             move |req, next| auth_layer(jwt_conf.clone(), req, next)
         }));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -146,7 +145,7 @@ tokio::task_local! {
 }
 
 async fn auth_layer(
-    jwt_conf: ConfJwt,
+    jwt_conf: Arc<ConfJwt>,
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
