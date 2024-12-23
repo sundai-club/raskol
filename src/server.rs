@@ -38,11 +38,30 @@ pub async fn run(addr: SocketAddr, jwt_opts: &jwt::Options) -> anyhow::Result<()
 }
 
 #[tracing::instrument(skip_all)]
-async fn handle(hits: Hits, _payload: Json<Payload>) -> Result<StatusCode> {
+async fn handle(hits: Hits, payload: Json<Payload>) -> Result<StatusCode> {
     let u = USER.get();
-    tracing::debug!(user = ?u, "Handling.");
+    tracing::debug!(user = ?u, ?payload, "Handling.");
     hits.hit(u.uid);
-    Ok(StatusCode::OK)
+    let resp_result = reqwest::Client::new()
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .json(&payload.0)
+        .send()
+        .await;
+    // TODO Revise status codes.
+    match resp_result {
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            let code = StatusCode::from_u16(code).unwrap_or_else(|error| {
+                tracing::error!(?error, ?code, "Failed to convert status code.");
+                StatusCode::INTERNAL_SERVER_ERROR
+            });
+            Ok(code)
+        }
+        Err(error) => {
+            tracing::error!(?error, "Failed to make the external request.");
+            Ok(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
 }
 
 #[tracing::instrument(skip_all)]
@@ -53,7 +72,16 @@ async fn dump(hits: Hits) -> Result<Json<Option<usize>>, StatusCode> {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct Payload {}
+struct Payload {
+    messages: Vec<Msg>,
+    model: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Msg {
+    role: String,
+    content: String,
+}
 
 #[derive(Clone, Debug, Default)]
 struct Hits {
