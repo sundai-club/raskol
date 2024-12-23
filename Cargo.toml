@@ -1,0 +1,15 @@
+[package]
+name = "raskol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { version = "1.0.95", features = ["backtrace"] }
+axum = "0.7.9"
+clap = { version = "4.5.23", features = ["derive"] }
+dashmap = "6.1.0"
+jsonwebtoken = "9.2.0"
+serde = { version = "1.0.216", features = ["derive"] }
+tokio = { version = "1.42.0", features = ["full", "tracing"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
