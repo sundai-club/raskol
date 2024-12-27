@@ -1,6 +1,24 @@
-use std::{fmt::Debug, fs, net::IpAddr, path::Path, str::FromStr};
+use std::{
+    fmt::Debug,
+    fs,
+    net::IpAddr,
+    path::Path,
+    str::FromStr,
+    sync::{Arc, LazyLock},
+};
 
 use anyhow::Context;
+
+pub const GLOBAL: LazyLock<Arc<Conf>> = LazyLock::new(|| {
+    let conf = read_or_create_default().unwrap_or_else(|error| {
+        panic!("Failed to initialize global config: {error:?}")
+    });
+    Arc::new(conf)
+});
+
+pub fn global() -> Arc<Conf> {
+    (*GLOBAL).clone()
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Conf {
@@ -14,6 +32,8 @@ pub struct Conf {
     pub jwt: ConfJwt,
     pub target_address: String,
     pub target_auth_token: String,
+    pub min_hit_interval: f32,
+    pub sqlite_busy_timeout: f32,
 }
 
 impl Default for Conf {
@@ -27,6 +47,8 @@ impl Default for Conf {
             jwt: ConfJwt::default(),
             target_address: "api.groq.com".to_string(),
             target_auth_token: String::new(),
+            min_hit_interval: 5.0,
+            sqlite_busy_timeout: 60.0,
         }
     }
 }

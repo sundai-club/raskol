@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     extract::{Path, Request},
@@ -7,39 +7,32 @@ use axum::{
     response::{Response, Result},
     Json,
 };
-use dashmap::DashMap;
 
 use crate::{
     auth,
-    conf::{Conf, ConfJwt},
+    conf::{self, Conf, ConfJwt},
+    data::Storage,
 };
 
-#[tracing::instrument(name = "server", skip_all, fields(addr = ?conf.addr, port = conf.port))]
-pub async fn run(conf: &Conf) -> anyhow::Result<()> {
+#[tracing::instrument(name = "server", skip_all)]
+pub async fn run() -> anyhow::Result<()> {
+    let conf = conf::global();
     tracing::info!(?conf, "Starting.");
     let addr = SocketAddr::from((conf.addr, conf.port));
-    let hits = Hits::new();
-    let conf = Arc::new(conf.clone());
+    let storage = Storage::connect().await?;
     let routes = axum::Router::new()
         .route(
             "/*endpoint",
             axum::routing::post({
-                let conf = conf.clone();
-                let hits = hits.clone();
-                move |endpoint, payload| {
-                    handle(conf.clone(), hits, endpoint, payload)
-                }
-            })
-            .get({
-                let hits = hits.clone();
-                move || dump(hits)
+                let storage = storage.clone();
+                move |endpoint, payload| handle(storage, endpoint, payload)
             }),
         )
         .route_layer(middleware::from_fn({
-            move |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
+            |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
         }))
         .route_layer(middleware::from_fn({
-            move |req, next: Next| auth_layer(conf.clone(), req, next)
+            |req, next: Next| auth_layer(req, next)
         }));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening.");
@@ -55,14 +48,29 @@ pub async fn run(conf: &Conf) -> anyhow::Result<()> {
     )
 )]
 async fn handle(
-    conf: Arc<Conf>,
-    hits: Hits,
+    storage: Storage,
     Path(endpoint): Path<String>,
     payload: Json<serde_json::Value>,
 ) -> Result<Response<String>, StatusCode> {
+    tracing::debug!("Handling.");
+    let conf = conf::global();
     let user: User = USER.get();
-    hits.hit(&user.uid);
-    tracing::debug!(hits = hits.get(&user.uid), "Handling.");
+    let (hit_count, elapsed_since_prev) =
+        storage.hit(&user.uid).await.map_err(|error| {
+            tracing::error!(?error, "Failed to hit storage.");
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+    let min_hit_interval = Duration::from_secs_f32(conf.min_hit_interval);
+    tracing::debug!(
+        hit_count,
+        ?elapsed_since_prev,
+        ?min_hit_interval,
+        "Checking interval."
+    );
+    if elapsed_since_prev < min_hit_interval {
+        tracing::warn!("Rejecting. Too close to previous request.");
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    };
     let address = &conf.target_address;
     let url = format!("https://{address}/{endpoint}");
     let resp = reqwest::Client::new()
@@ -106,41 +114,6 @@ async fn handle(
     })
 }
 
-#[tracing::instrument(
-    skip_all,
-    fields(
-        req_id = REQ_ID.get().req_id,
-        uid = USER.get().uid
-    )
-)]
-async fn dump(hits: Hits) -> Result<Json<Option<usize>>, StatusCode> {
-    tracing::debug!("Dumping.");
-    let u = USER.get();
-    Ok(Json(hits.get(&u.uid)))
-}
-
-#[derive(Clone, Debug, Default)]
-struct Hits {
-    per_user: Arc<DashMap<String, usize>>,
-}
-
-impl Hits {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn hit(&self, uid: &str) {
-        self.per_user
-            .entry(uid.to_string())
-            .and_modify(|count| *count += 1)
-            .or_insert(1);
-    }
-
-    fn get(&self, uid: &str) -> Option<usize> {
-        self.per_user.get(uid).map(|count| *count)
-    }
-}
-
 #[derive(Debug, Clone)]
 struct User {
     pub uid: String,
@@ -164,10 +137,10 @@ tokio::task_local! {
 }
 
 async fn auth_layer(
-    conf: Arc<Conf>,
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let conf: Arc<Conf> = conf::global();
     let auth_token = req
         .headers()
         .get(header::AUTHORIZATION)

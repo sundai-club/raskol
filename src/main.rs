@@ -28,12 +28,12 @@ async fn main() -> anyhow::Result<()> {
     human_panic_setup();
     let cli = Cli::parse();
     set_current_dir(&cli.dir)?;
-    let conf = raskol::conf::read_or_create_default()?;
-    raskol::tracing::init(conf.log_level)?;
-    tracing::debug!(?cli, ?conf, "Starting.");
+    raskol::tracing::init()?;
+    tracing::debug!(?cli, "Starting.");
     match &cli.cmd {
-        Cmd::Server => raskol::server::run(&conf).await,
+        Cmd::Server => raskol::server::run().await,
         Cmd::Jwt { uid, ttl } => {
+            let conf = raskol::conf::global();
             let claims = raskol::auth::Claims::new(
                 uid,
                 Duration::from_secs_f64(*ttl),
