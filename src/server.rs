@@ -101,16 +101,26 @@ async fn handle(
 
     let address = &conf.target_address;
     let url = format!("https://{address}/{endpoint}");
-    let resp = reqwest::Client::new()
+    let (client, out_req) = reqwest::Client::new()
         .post(url)
         .bearer_auth(&conf.target_auth_token)
         .json(&chat_req)
-        .send()
-        .await
-        .map_err(|error| {
-            tracing::error!(?error, "Failed to make the external request.");
-            StatusCode::SERVICE_UNAVAILABLE
-        })?;
+        .build_split();
+    let out_req = out_req.map_err(|error| {
+        tracing::error!(?error, "Failed to build outgoing request.");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    tracing::debug!(
+        out_headers = ?out_req.headers(),
+        out_body = ?out_req
+            .body()
+            .map(|b| b.as_bytes().map(|b| String::from_utf8_lossy(b))),
+        "Outgoing reqwest."
+    );
+    let resp = client.execute(out_req).await.map_err(|error| {
+        tracing::error!(?error, "Failed to make the external request.");
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
 
     let status = resp.status();
     let headers = resp.headers().to_owned();

@@ -14,7 +14,11 @@ impl ChatReq {
 pub struct ChatMsg {
     pub role: String,
     pub content: String,
-    pub name: String,
+
+    // XXX Without skipping we get JSON `"name": null`, which Groq rejects,
+    //     but accepts when it is instead omitted from the structure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl ChatMsg {
