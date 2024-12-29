@@ -10,6 +10,7 @@ use axum::{
 
 use crate::{
     auth,
+    chat::ChatReq,
     conf::{self, Conf, ConfJwt},
     data::Storage,
 };
@@ -50,11 +51,16 @@ pub async fn run() -> anyhow::Result<()> {
 async fn handle(
     storage: Storage,
     Path(endpoint): Path<String>,
-    payload: Json<serde_json::Value>,
+    Json(chat_req): Json<ChatReq>,
 ) -> Result<Response<String>, StatusCode> {
     tracing::debug!("Handling.");
     let conf = conf::global();
     let user: User = USER.get();
+
+    //
+    // Rate Limit
+    //
+    let _token_count = chat_req.tokens_estimate();
     let (hit_count, elapsed_since_prev) =
         storage.hit(&user.uid).await.map_err(|error| {
             tracing::error!(?error, "Failed to hit storage.");
@@ -69,25 +75,46 @@ async fn handle(
     );
     if elapsed_since_prev < min_hit_interval {
         tracing::warn!("Rejecting. Too close to previous request.");
+        // TODO Explain reason in response body.
         return Err(StatusCode::TOO_MANY_REQUESTS);
     };
+
+    //
+    // Token Budget:
+    // 1. check if enough in budget
+    // 2. make request
+    // 3. consume from budget
+    //
+    let token_count = chat_req.tokens_estimate();
+    let is_enough_tokens_in_budget = storage
+        .tokens_check(&user.uid, token_count)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to hit storage.");
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+    if !is_enough_tokens_in_budget {
+        tracing::warn!("Rejecting. Token budget exceeded.");
+        // TODO Explain reason in response body.
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
     let address = &conf.target_address;
     let url = format!("https://{address}/{endpoint}");
     let resp = reqwest::Client::new()
         .post(url)
         .bearer_auth(&conf.target_auth_token)
-        .json(&payload.0)
+        .json(&chat_req)
         .send()
         .await
         .map_err(|error| {
             tracing::error!(?error, "Failed to make the external request.");
             StatusCode::SERVICE_UNAVAILABLE
         })?;
-    if !resp.status().is_success() {
-        tracing::error!(?resp, "External request rejected.");
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
-    let code = resp.status().as_u16();
+
+    let status = resp.status();
+    let headers = resp.headers().to_owned();
+    let code = status.as_u16();
     let code = StatusCode::from_u16(code).map_err(|error| {
         tracing::error!(?error, ?code, "Failed to convert status code.");
         StatusCode::INTERNAL_SERVER_ERROR
@@ -100,6 +127,20 @@ async fn handle(
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
+    if !status.is_success() {
+        tracing::error!(
+            ?status,
+            ?headers,
+            ?body,
+            "External request rejected."
+        );
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    // XXX If tokens_consume fails - we don't want to fail the request, so
+    //     we might end-up not consuming. May need to yell louder here. Alert?
+    if let Err(error) = storage.tokens_consume(&user.uid, token_count).await {
+        tracing::error!(?error, ?token_count, "Failed to consume tokens!");
+    }
     if is_json(&body) {
         Response::builder()
             .status(code)

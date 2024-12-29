@@ -33,6 +33,7 @@ pub struct Conf {
     pub target_address: String,
     pub target_auth_token: String,
     pub min_hit_interval: f32,
+    pub max_tokens_per_day: u64,
     pub sqlite_busy_timeout: f32,
 }
 
@@ -48,6 +49,7 @@ impl Default for Conf {
             target_address: "api.groq.com".to_string(),
             target_auth_token: String::new(),
             min_hit_interval: 5.0,
+            max_tokens_per_day: 1_000_000, // TODO Revise.
             sqlite_busy_timeout: 60.0,
         }
     }

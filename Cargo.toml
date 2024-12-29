@@ -1,6 +1,6 @@
 [package]
 name = "raskol"
-version = "0.6.0"
+version = "0.7.0"
 description = "Share 1 API key with N group members without revealing it."
 authors = ["Siraaj Khandkar <siraaj@khandkar.net>"]
 keywords = ["photo", "organizer", "exif"]
@@ -12,6 +12,7 @@ edition = "2021"
 [dependencies]
 anyhow = { version = "1.0.95", features = ["backtrace"] }
 axum = "0.7.9"
+chrono = "0.4.39"
 clap = { version = "4.5.23", features = ["derive"] }
 cuid2 = "0.1.3"
 human-panic = "2.0.2"
