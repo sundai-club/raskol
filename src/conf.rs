@@ -9,13 +9,14 @@ use std::{
 
 use anyhow::Context;
 
-pub const GLOBAL: LazyLock<Arc<Conf>> = LazyLock::new(|| {
+pub static GLOBAL: LazyLock<Arc<Conf>> = LazyLock::new(|| {
     let conf = read_or_create_default().unwrap_or_else(|error| {
         panic!("Failed to initialize global config: {error:?}")
     });
     Arc::new(conf)
 });
 
+#[must_use]
 pub fn global() -> Arc<Conf> {
     (*GLOBAL).clone()
 }

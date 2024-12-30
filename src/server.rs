@@ -197,7 +197,7 @@ async fn auth_layer(
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if let Some(user) = authorize(auth_token, &conf.jwt).await {
+    if let Some(user) = authorize(auth_token, &conf.jwt) {
         Ok(USER.scope(user, next.run(req)).await)
     } else {
         tracing::debug!(?req, "Invalid or missing authorization.");
@@ -205,7 +205,7 @@ async fn auth_layer(
     }
 }
 
-async fn authorize(auth_token: &str, jwt_conf: &ConfJwt) -> Option<User> {
+fn authorize(auth_token: &str, jwt_conf: &ConfJwt) -> Option<User> {
     auth::Claims::from_str(auth_token, jwt_conf)
         .inspect_err(|error| tracing::debug!(?error, "Auth failed."))
         .ok()

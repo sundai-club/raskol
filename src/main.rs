@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
 fn set_current_dir(path: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(path)
         .context(format!("Failed to create directory path: {path:?}"))?;
-    env::set_current_dir(&path)
+    env::set_current_dir(path)
         .context(format!("Failed to set current directory to {path:?}"))?;
     Ok(())
 }

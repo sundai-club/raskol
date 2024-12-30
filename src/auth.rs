@@ -4,7 +4,7 @@ use crate::conf::ConfJwt;
 
 use super::jwt;
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
 pub struct Claims {
     pub sub: String,
     exp: u64,

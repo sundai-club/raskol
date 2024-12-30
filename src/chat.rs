@@ -6,7 +6,7 @@ pub struct ChatReq {
 
 impl ChatReq {
     pub fn tokens_estimate(&self) -> usize {
-        self.messages.iter().map(|msg| msg.tokens_estimate()).sum()
+        self.messages.iter().map(ChatMsg::tokens_estimate).sum()
     }
 }
 
