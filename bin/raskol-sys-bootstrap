@@ -1,0 +1,62 @@
+#! /bin/bash
+
+set -e
+
+SERVICE_NAME='raskol'
+SERVICE_HOME=/opt/"$SERVICE_NAME"
+SERVICE_FILE=/etc/systemd/system/"$SERVICE_NAME".service
+SERVICE_USER="$SERVICE_NAME"
+SERVICE_GROUP="$SERVICE_NAME"
+SERVICE_SHELL=/usr/sbin/nologin
+
+ADMIN_USER='admin'
+ADMIN_GROUPS="sudo,$SERVICE_GROUP"
+ADMIN_HOME=/home/"$ADMIN_USER"
+ADMIN_SHELL=/bin/bash
+
+UMASK=077
+
+apt update -y
+# apt upgrade -y
+apt install -y acl vim sudo git tmux tree htop zsh zsh-syntax-highlighting fzf apt-file ufw
+
+### Service user
+useradd \
+    --system \
+    --home-dir "$SERVICE_HOME" \
+    --create-home \
+    --shell "$SERVICE_SHELL" \
+    --key UMASK="$UMASK" \
+    "$SERVICE_USER"
+chmod g+s "$SERVICE_HOME"
+touch "$SERVICE_FILE"
+chown -R "$SERVICE_USER":"$SERVICE_GROUP" "$SERVICE_HOME"
+chown -R "$SERVICE_USER":"$SERVICE_GROUP" "$SERVICE_FILE"
+chmod -R g+rwX "$SERVICE_HOME"
+
+### Admin user
+#useradd \
+#    --create-home \
+#    --shell "$ADMIN_SHELL" \
+#    --key UMASK="$UMASK" \
+#    --groups "$ADMIN_GROUPS" \
+#    "$ADMIN_USER"
+#mkdir -p "$ADMIN_HOME"/.ssh
+#cp /root/.ssh/authorized_keys "$ADMIN_HOME"/.ssh/
+chmod 700 "$ADMIN_HOME"/.ssh/
+chmod 600 "$ADMIN_HOME"/.ssh/authorized_keys
+touch "$ADMIN_HOME"/.zshrc
+git clone  https://github.com/ohmyzsh/ohmyzsh.git "$ADMIN_HOME"/.oh-my-zsh || true
+chown -R "$ADMIN_USER":"$ADMIN_USER" "$ADMIN_HOME"
+
+setfacl -R -m   u:"$ADMIN_USER":rwX "$SERVICE_HOME"
+setfacl -R -m d:u:"$ADMIN_USER":rwX "$SERVICE_HOME"
+setfacl -R -m   u:"$ADMIN_USER":rwX "$SERVICE_FILE"
+setfacl -R -m d:u:"$ADMIN_USER":rwX "$SERVICE_FILE"
+
+echo '======== success! ==========='
+echo 'Now do the manual tasks:'
+echo "- [ ] set password for $ADMIN_USER"
+echo '- [ ] disable root logins in /etc/ssh/sshd_config'
+echo "- [ ] edit config in $SERVICE_HOME/data/conf.toml"
+echo '============================='
