@@ -2,7 +2,7 @@ use std::{
     fmt::Debug,
     fs,
     net::IpAddr,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, LazyLock},
 };
@@ -36,6 +36,7 @@ pub struct Conf {
     pub min_hit_interval: f32,
     pub max_tokens_per_day: u64,
     pub sqlite_busy_timeout: f32,
+    pub tls: Option<Tls>,
 }
 
 impl Default for Conf {
@@ -52,8 +53,15 @@ impl Default for Conf {
             min_hit_interval: 5.0,
             max_tokens_per_day: 1_000_000, // TODO Revise.
             sqlite_busy_timeout: 60.0,
+            tls: None,
         }
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct Tls {
+    pub cert_file: PathBuf,
+    pub key_file: PathBuf,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]

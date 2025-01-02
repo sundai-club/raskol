@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
+use anyhow::anyhow;
 use axum::{
     extract::{Path, Request},
     http::{header, StatusCode},
@@ -35,9 +36,49 @@ pub async fn run() -> anyhow::Result<()> {
         .route_layer(middleware::from_fn({
             |req, next: Next| auth_layer(req, next)
         }));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("Listening.");
-    axum::serve(listener, routes).await?;
+
+    match &conf.tls {
+        None => {
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            tracing::warn!(?addr, "Listening unencrypted.");
+            axum::serve(listener, routes).await?;
+        }
+        Some(conf::Tls {
+            cert_file,
+            key_file,
+        }) => {
+            // XXX One MUST do this manual init of rustls provider when using
+            //     more than a single dep which itself depends on rustls.
+            //     Here we using 2:
+            //     - axum_server
+            //     - reqwest
+            rustls::crypto::aws_lc_rs::default_provider()
+                .install_default()
+                .map_err(|crypto_provider| {
+                    anyhow!(
+                        "Failed to install default crypto provider: \
+                        {crypto_provider:?}"
+                    )
+                })?;
+
+            let config =
+                axum_server::tls_rustls::RustlsConfig::from_pem_file(
+                    cert_file, key_file,
+                )
+                .await?;
+
+            tracing::info!(
+                ?addr,
+                ?cert_file,
+                ?key_file,
+                "Listening with TLS."
+            );
+            axum_server::bind_rustls(addr, config)
+                .serve(routes.into_make_service())
+                .await?;
+        }
+    }
+
     Ok(())
 }
 

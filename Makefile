@@ -114,3 +114,27 @@ clippy_pedantic:
 .PHONY: tag
 tag:
 	git tag v$(PKG_VERSION)
+
+# =============================================================================
+# test
+# =============================================================================
+
+CERT_CERT := data/cert/cert.pem
+CERT_KEY := data/cert/key.pem
+
+.PHONY: cert
+cert: $(CERT_KEY) $(CERT_CERT)
+
+$(CERT_KEY) $(CERT_CERT): | data/cert
+	openssl \
+		req -x509 \
+		-newkey rsa:4096 \
+		-keyout $(CERT_KEY) \
+		-out $(CERT_CERT) \
+		-days 365 \
+		-nodes \
+		-subj '/CN=localhost' \
+		-addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+
+data/cert:
+	mkdir -p $@
