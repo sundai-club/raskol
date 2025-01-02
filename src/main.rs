@@ -10,7 +10,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 struct Cli {
     /// Working directory, with config and data files.
-    #[clap(short, long, default_value = "data")]
+    #[clap(short, long, default_value = ".")]
     dir: PathBuf,
 
     #[clap(subcommand)]

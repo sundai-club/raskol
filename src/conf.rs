@@ -115,7 +115,7 @@ where
 }
 
 pub fn read_or_create_default() -> anyhow::Result<Conf> {
-    let path = "conf.toml";
+    let path = "conf/conf.toml";
     read_or_create_default_(path).context(path)
 }
 
@@ -127,6 +127,13 @@ pub fn read_or_create_default_<P: AsRef<Path>>(
         let s = fs::read_to_string(path)?;
         toml::from_str(&s)?
     } else {
+        if let Some(parent) = path.parent() {
+            let ctx = format!(
+                "Failed to create parent directory \
+                for conf file: {path:?}"
+            );
+            fs::create_dir_all(parent).context(ctx)?;
+        }
         let conf = Conf::default();
         let s = toml::to_string_pretty(&conf)?;
         fs::write(path, s)?;

@@ -1,5 +1,10 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use sqlx::Executor;
 
@@ -30,10 +35,18 @@ pub struct Storage {
 
 impl Storage {
     pub async fn connect() -> anyhow::Result<Self> {
+        let file_path = PathBuf::from("data/data.db");
+        if let Some(parent) = file_path.parent() {
+            let ctx = format!(
+                "Failed to create parent directory \
+                for database file: {file_path:?}"
+            );
+            fs::create_dir_all(parent).context(ctx)?;
+        }
         let busy_timeout =
             Duration::from_secs_f32(conf::global().sqlite_busy_timeout);
         let options = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename("data.db")
+            .filename(file_path)
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .busy_timeout(busy_timeout);

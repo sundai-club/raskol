@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=raskol
 Group=raskol
-WorkingDirectory=/opt/raskol/data
-ExecStart=/opt/raskol/bin/raskol --dir /opt/raskol/data server
+WorkingDirectory=/opt/raskol
+ExecStart=/opt/raskol/bin/raskol server
 Restart=on-failure
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
