@@ -8,7 +8,8 @@ REL_TARGET   := x86_64-unknown-linux-musl
 REL_DIR_PATH := ./target/$(REL_TARGET)/release
 REL_BIN       = $(REL_DIR_PATH)/$(PKG_NAME)
 
-SRV_ADDR          := 35.234.250.103  # TODO DNS
+# TODO DNS
+SRV_ADDR          := 35.234.250.103
 SRV_ADMIN_USER    := admin
 SRV_SERVICE_USER  := raskol
 SRV_SERVICE_GROUP := $(SRV_SERVICE_USER)
