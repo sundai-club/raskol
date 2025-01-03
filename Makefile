@@ -120,13 +120,13 @@ tag:
 # test
 # =============================================================================
 
-CERT_CERT := data/cert/cert.pem
-CERT_KEY := data/cert/key.pem
+CERT_CERT := cert/cert.pem
+CERT_KEY := cert/key.pem
 
-.PHONY: cert
-cert: $(CERT_KEY) $(CERT_CERT)
+.PHONY: local_cert_files
+local_cert_files: $(CERT_KEY) $(CERT_CERT)
 
-$(CERT_KEY) $(CERT_CERT): | data/cert
+$(CERT_KEY) $(CERT_CERT): | cert
 	openssl \
 		req -x509 \
 		-newkey rsa:4096 \
@@ -137,5 +137,5 @@ $(CERT_KEY) $(CERT_CERT): | data/cert
 		-subj '/CN=localhost' \
 		-addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
 
-data/cert:
+cert:
 	mkdir -p $@
