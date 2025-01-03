@@ -23,8 +23,14 @@ struct HitsRow {
 
 #[derive(sqlx::FromRow)]
 struct TokensRow {
+    // Used in SQL, but not in Rust. Here for documentation.
+    #[allow(dead_code)]
     uid: String,
+
+    // Used in SQL, but not in Rust. Here for documentation.
+    #[allow(dead_code)]
     date: String,
+
     total: u64,
 }
 
