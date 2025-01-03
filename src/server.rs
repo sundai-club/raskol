@@ -2,10 +2,11 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use axum::{
-    extract::{Path, Request},
+    extract::{ConnectInfo, Path, Request},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Response, Result},
+    routing::get,
     Json,
 };
 
@@ -23,19 +24,27 @@ pub async fn run() -> anyhow::Result<()> {
     let addr = SocketAddr::from((conf.addr, conf.port));
     let storage = Storage::connect().await?;
     let routes = axum::Router::new()
-        .route(
-            "/*endpoint",
-            axum::routing::post({
-                let storage = storage.clone();
-                move |endpoint, payload| handle(storage, endpoint, payload)
-            }),
+        .route("/ping", get(handle_ping))
+        .nest(
+            "/",
+            axum::Router::new()
+                .route(
+                    "/*endpoint",
+                    axum::routing::post({
+                        let storage = storage.clone();
+                        move |conn_info, endpoint, payload| {
+                            handle_api(storage, conn_info, endpoint, payload)
+                        }
+                    }),
+                )
+                .route_layer(middleware::from_fn({
+                    |req, next: Next| auth_layer(req, next)
+                })),
         )
         .route_layer(middleware::from_fn({
             |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
         }))
-        .route_layer(middleware::from_fn({
-            |req, next: Next| auth_layer(req, next)
-        }));
+        .into_make_service_with_connect_info::<SocketAddr>();
 
     match &conf.tls {
         None => {
@@ -73,13 +82,22 @@ pub async fn run() -> anyhow::Result<()> {
                 ?key_file,
                 "Listening with TLS."
             );
-            axum_server::bind_rustls(addr, config)
-                .serve(routes.into_make_service())
-                .await?;
+            axum_server::bind_rustls(addr, config).serve(routes).await?;
         }
     }
 
     Ok(())
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(req_id = REQ_ID.get().req_id)
+)]
+async fn handle_ping(
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
+) -> StatusCode {
+    tracing::info!(?from, "Handling ping request.");
+    StatusCode::OK
 }
 
 #[tracing::instrument(
@@ -89,12 +107,13 @@ pub async fn run() -> anyhow::Result<()> {
         uid = USER.get().uid
     )
 )]
-async fn handle(
+async fn handle_api(
     storage: Storage,
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
     Path(endpoint): Path<String>,
     Json(chat_req): Json<ChatReq>,
 ) -> Result<Response<String>, StatusCode> {
-    tracing::debug!("Handling.");
+    tracing::info!(?from, "Handling API request.");
     let conf = conf::global();
     let user: User = USER.get();
 
