@@ -1,6 +1,6 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use axum::{
     extract::{ConnectInfo, Path, Request},
     http::{header, StatusCode},
@@ -20,7 +20,8 @@ use crate::{
 #[tracing::instrument(name = "server", skip_all)]
 pub async fn run() -> anyhow::Result<()> {
     let conf = conf::global();
-    tracing::info!(?conf, "Starting.");
+    let dir = env::current_dir()?;
+    tracing::info!(?dir, ?conf, "Starting.");
     let addr = SocketAddr::from((conf.addr, conf.port));
     let storage = Storage::connect().await?;
     let routes = axum::Router::new()
@@ -74,7 +75,11 @@ pub async fn run() -> anyhow::Result<()> {
                 axum_server::tls_rustls::RustlsConfig::from_pem_file(
                     cert_file, key_file,
                 )
-                .await?;
+                .await
+                .context(format!(
+                    "Failed to construct RustlsConfig. \
+                    cert_file={cert_file:?}, key_file={key_file:?}"
+                ))?;
 
             tracing::info!(
                 ?addr,
