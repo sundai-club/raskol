@@ -28,6 +28,13 @@ toml = "0.8.19"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
+[dev-dependencies]
+assert_cmd = "2.0.16"
+# XXX Using native-tls for tests client because rustls-tls doesn't work
+#     for self-signed certs (CaUsedAsEndEntity).
+reqwest = { version = "0.12.9", default-features = false, features = ["json", "native-tls"]}
+tempfile = "3.15.0"
+
 ###############################################################################
 # binary size optimizations
 # https://github.com/johnthagen/min-sized-rust
