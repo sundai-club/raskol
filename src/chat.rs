@@ -1,17 +1,17 @@
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct ChatReq {
+pub struct Req {
     pub model: String,
-    pub messages: Vec<ChatMsg>,
+    pub messages: Vec<Msg>,
 }
 
-impl ChatReq {
+impl Req {
     pub fn tokens_estimate(&self) -> usize {
-        self.messages.iter().map(ChatMsg::tokens_estimate).sum()
+        self.messages.iter().map(Msg::tokens_estimate).sum()
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct ChatMsg {
+pub struct Msg {
     pub role: String,
     pub content: String,
 
@@ -21,7 +21,7 @@ pub struct ChatMsg {
     pub name: Option<String>,
 }
 
-impl ChatMsg {
+impl Msg {
     // The simplest estimation suggested by ChatGPT: (char count / 4).
     fn tokens_estimate(&self) -> usize {
         let alphanum_char_count = self

@@ -56,7 +56,7 @@ fn setup_conf(workdir: &Path) -> raskol::conf::Conf {
         log_level: tracing::Level::INFO,
         addr: "127.0.0.1".parse().unwrap(),
         port: 7000,
-        jwt: raskol::conf::ConfJwt {
+        jwt: raskol::conf::Jwt {
             secret: "fake-secret".to_string(),
             audience: "fake-audience".to_string(),
             issuer: "fake-issuer".to_string(),

@@ -11,9 +11,8 @@ use axum::{
 };
 
 use crate::{
-    auth,
-    chat::ChatReq,
-    conf::{self, Conf, ConfJwt},
+    auth, chat,
+    conf::{self, Conf},
     data::Storage,
 };
 
@@ -116,7 +115,7 @@ async fn handle_api(
     storage: Storage,
     ConnectInfo(from): ConnectInfo<SocketAddr>,
     Path(endpoint): Path<String>,
-    Json(chat_req): Json<ChatReq>,
+    Json(chat_req): Json<chat::Req>,
 ) -> Result<Response<String>, StatusCode> {
     tracing::info!(?from, "Handling API request.");
     let conf = conf::global();
@@ -270,7 +269,7 @@ async fn auth_layer(
     }
 }
 
-fn authorize(auth_token: &str, jwt_conf: &ConfJwt) -> Option<User> {
+fn authorize(auth_token: &str, jwt_conf: &conf::Jwt) -> Option<User> {
     auth::Claims::from_str(auth_token, jwt_conf)
         .inspect_err(|error| tracing::debug!(?error, "Auth failed."))
         .ok()

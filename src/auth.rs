@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
-use crate::conf::ConfJwt;
+use crate::conf;
 
 use super::jwt;
 
@@ -18,11 +18,11 @@ impl Claims {
         Ok(Self { sub, exp })
     }
 
-    pub fn to_str(&self, jwt_conf: &ConfJwt) -> jwt::Result<String> {
+    pub fn to_str(&self, jwt_conf: &conf::Jwt) -> jwt::Result<String> {
         jwt::encode(self, jwt_conf)
     }
 
-    pub fn from_str(str: &str, jwt_conf: &ConfJwt) -> jwt::Result<Self> {
+    pub fn from_str(str: &str, jwt_conf: &conf::Jwt) -> jwt::Result<Self> {
         jwt::decode::<Self>(str, jwt_conf)
     }
 }
@@ -33,14 +33,14 @@ mod tests {
 
     use jsonwebtoken::errors::ErrorKind;
 
-    use crate::conf::ConfJwt;
+    use crate::conf;
 
     use super::Claims;
 
     #[test]
     fn good() {
         let claims = Claims::new("foo", Duration::from_secs(5)).unwrap();
-        let conf = ConfJwt::default();
+        let conf = conf::Jwt::default();
         let encoded: String = claims.to_str(&conf).unwrap();
         let decoded = Claims::from_str(&encoded, &conf).unwrap();
         assert_eq!(&claims, &decoded);
@@ -50,8 +50,8 @@ mod tests {
     fn bad_key() {
         let claims = Claims::new("foo", Duration::from_secs(5)).unwrap();
 
-        let conf_good = ConfJwt::default();
-        let conf_bad = ConfJwt {
+        let conf_good = conf::Jwt::default();
+        let conf_bad = conf::Jwt {
             secret: conf_good.secret.to_string() + "naughty",
             ..conf_good.clone()
         };
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn expired() {
-        let conf = ConfJwt {
+        let conf = conf::Jwt {
             secret: "super secret".to_string(),
             ..Default::default()
         };

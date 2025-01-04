@@ -30,7 +30,7 @@ pub struct Conf {
     pub log_level: tracing::Level,
     pub addr: IpAddr,
     pub port: u16,
-    pub jwt: ConfJwt,
+    pub jwt: Jwt,
     pub target_address: String,
     pub target_auth_token: String,
     pub min_hit_interval: f32,
@@ -47,7 +47,7 @@ impl Default for Conf {
                 unreachable!("Fat-fingered default IP address!")
             }),
             port: 3001,
-            jwt: ConfJwt::default(),
+            jwt: Jwt::default(),
             target_address: "api.groq.com".to_string(),
             target_auth_token: String::new(),
             min_hit_interval: 5.0,
@@ -65,13 +65,13 @@ pub struct Tls {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct ConfJwt {
+pub struct Jwt {
     pub secret: String,
     pub audience: String,
     pub issuer: String,
 }
 
-impl Default for ConfJwt {
+impl Default for Jwt {
     fn default() -> Self {
         Self {
             secret: "super-secret".to_string(),
@@ -81,9 +81,9 @@ impl Default for ConfJwt {
     }
 }
 
-impl Debug for ConfJwt {
+impl Debug for Jwt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConfJwt")
+        f.debug_struct("conf::Jwt")
             .field("secret", &"<XXXXX>")
             .field("audience", &self.audience)
             .field("issuer", &self.issuer)

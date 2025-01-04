@@ -1,10 +1,10 @@
 use jsonwebtoken::Algorithm;
 
-use crate::conf::ConfJwt;
+use crate::conf;
 
 pub type Result<T> = jsonwebtoken::errors::Result<T>;
 
-pub fn encode<T>(claims: &T, conf: &ConfJwt) -> Result<String>
+pub fn encode<T>(claims: &T, conf: &conf::Jwt) -> Result<String>
 where
     T: serde::Serialize,
 {
@@ -16,7 +16,7 @@ where
     Ok(str)
 }
 
-pub fn decode<T>(str: &str, conf: &ConfJwt) -> Result<T>
+pub fn decode<T>(str: &str, conf: &conf::Jwt) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
 {
