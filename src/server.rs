@@ -2,7 +2,7 @@ use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use axum::{
-    extract::{ConnectInfo, Path, Request},
+    extract::{ConnectInfo, Path, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Response, Result},
@@ -11,9 +11,11 @@ use axum::{
 };
 
 use crate::{
-    auth, chat,
+    auth::self,
+    chat,
     conf::{self, Conf},
     data::Storage,
+    types::UserStats,
 };
 
 #[tracing::instrument(name = "server", skip_all)]
@@ -24,10 +26,11 @@ pub async fn run() -> anyhow::Result<()> {
     let addr = SocketAddr::from((conf.addr, conf.port));
     let storage = Storage::connect().await?;
     let routes = axum::Router::new()
-        .route("/ping", get(handle_ping))
         .nest(
             "/",
             axum::Router::new()
+                .route("/ping", get(handle_ping))
+                .route("/stats", get(stats_handler))
                 .route(
                     "/*endpoint",
                     axum::routing::post({
@@ -44,13 +47,15 @@ pub async fn run() -> anyhow::Result<()> {
         .route_layer(middleware::from_fn({
             |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
         }))
-        .into_make_service_with_connect_info::<SocketAddr>();
+        .with_state(storage);
+
+    let service = routes.into_make_service_with_connect_info::<SocketAddr>();
 
     match &conf.tls {
         None => {
             let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::warn!(?addr, "Listening unencrypted.");
-            axum::serve(listener, routes).await?;
+            axum::serve(listener, service).await?;
         }
         Some(conf::Tls {
             cert_file,
@@ -86,7 +91,9 @@ pub async fn run() -> anyhow::Result<()> {
                 ?key_file,
                 "Listening with TLS."
             );
-            axum_server::bind_rustls(addr, config).serve(routes).await?;
+            axum_server::bind_rustls(addr, config)
+                .serve(service)
+                .await?;
         }
     }
 
@@ -95,20 +102,33 @@ pub async fn run() -> anyhow::Result<()> {
 
 #[tracing::instrument(
     skip_all,
-    fields(req_id = REQ_ID.get().req_id)
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid,
+        role = USER.get().role
+    )
 )]
 async fn handle_ping(
     ConnectInfo(from): ConnectInfo<SocketAddr>,
-) -> StatusCode {
+) -> Result<&'static str, StatusCode> {
+    let user: User = USER.get();
+    
+    // Allow both HACKER and ADMIN roles
+    if user.role != "HACKER" && user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Unauthorized role attempted to ping.");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     tracing::info!(?from, "Handling ping request.");
-    StatusCode::OK
+    Ok("pong")
 }
 
 #[tracing::instrument(
     skip_all,
     fields(
         req_id = REQ_ID.get().req_id,
-        uid = USER.get().uid
+        uid = USER.get().uid,
+        role = USER.get().role
     )
 )]
 async fn handle_api(
@@ -120,6 +140,12 @@ async fn handle_api(
     tracing::info!(?from, "Handling API request.");
     let conf = conf::global();
     let user: User = USER.get();
+
+    // Allow both HACKER and ADMIN roles
+    if user.role != "HACKER" && user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Unauthorized role attempted to use tokens.");
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     //
     // Rate Limit
@@ -229,9 +255,42 @@ async fn handle_api(
     })
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid,
+        role = USER.get().role
+    )
+)]
+pub async fn stats_handler(
+    State(storage): State<Storage>,
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
+) -> Result<Json<UserStats>, StatusCode> {
+    let user: User = USER.get();
+    
+    // Allow both HACKER and ADMIN roles
+    if user.role != "HACKER" && user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Unauthorized role attempted to view stats.");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    tracing::info!(?from, "Handling stats request for user {}.", user.uid);
+    
+    let stats = storage.get_user_stats(&user.uid)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to get user stats.");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(stats))
+}
+
 #[derive(Debug, Clone)]
 struct User {
     pub uid: String,
+    pub role: String,
 }
 
 #[derive(Debug, Clone)]
@@ -273,9 +332,13 @@ fn authorize(auth_token: &str, jwt_conf: &conf::Jwt) -> Option<User> {
     auth::Claims::from_str(auth_token, jwt_conf)
         .inspect_err(|error| tracing::debug!(?error, "Auth failed."))
         .ok()
-        .map(|claims| User { uid: claims.sub })
+        .map(|claims| User { 
+            uid: claims.sub,
+            role: claims.role,
+        })
 }
 
 fn is_json(s: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(s).is_ok()
 }
+
