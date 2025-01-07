@@ -76,6 +76,12 @@ To make requests through the proxy:
 Example using curl:
 
 ```
+curl -i http://localhost:3001/openai/v1/chat/completions \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsImNhdCI6ImNsX0I3ZDRQRDIyMkFBQSIsInR5cCI6IkpXVCJ9.eyJhcHBfbWV0YWRhdGEiOnt9LCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJjZGlya3M0K3Rlc3RAbWUuY29tIiwiZXhwIjoxNzM2ODgwNjUzLCJpYXQiOjE3MzYyODA2NTMsImlzcyI6Imh0dHBzOi8vYnJpZ2h0LWtpdHRlbi00MS5jbGVyay5hY2NvdW50cy5kZXYiLCJqdGkiOiIyNWQ3YTEwNDc2ZTUzNTkyM2E3OSIsIm5iZiI6MTczNjI4MDY0OCwicm9sZSI6IkhBQ0tFUiIsInN1YiI6InVzZXJfMnJKYTNxaW50TXU0Vm1lVEdIVlhXNVdqWGEzIiwidXNlcl9tZXRhZGF0YSI6e319.09TVUm3zFRYqjHJhtlknknVhOPtclDwUlK6X6MHTSwg' \
+  -H 'Content-Type: application/json' \
+  -X POST \
+  --json '{"messages": [{"role": "user", "content": "write a banger tweet for c programmers"}], "model": "llama3-8b-8192"}'
+```
 
 ## Authorization
 
@@ -85,26 +91,43 @@ The API uses role-based access control with JWT tokens. There are two privileged
 - `ADMIN`: Administrative role with the same permissions as HACKER
 
 Both roles can:
+
 - Make API requests through the proxy
 - View usage statistics
 - Access token usage information
 
 Users without these roles will receive a 403 Forbidden response when attempting to access protected endpoints.
 
+## API Documentation
+
+The API documentation is available through a Swagger UI interface at:
+
+`http://localhost:3001/swagger-ui`
+
+This interactive documentation allows you to:
+
+- Browse all available endpoints
+- See request/response schemas
+- Test endpoints directly from the browser
+- View authentication requirements
+- Understand rate limiting and token usage
+
 ## API Endpoints
 
-- `POST /<endpoint>`: Forwards requests to the target API (requires HACKER or ADMIN role)
-- `GET /ping`: Health check endpoint (public, no authentication required)
+- `POST /{endpoint}`: Forwards requests to the target API (requires HACKER or ADMIN role)
+- `GET /ping`: Health check endpoint (requires HACKER or ADMIN role)
 - `GET /stats`: Returns usage statistics for the authenticated user (requires HACKER or ADMIN role)
-- `GET /stats/:user_id`: Returns usage statistics for a specific user (requires ADMIN role)
-- `GET /all-stats`: Returns usage statistics for all users (requires ADMIN role)
+- `GET /total-stats`: Returns usage statistics for all users (requires ADMIN role)
 
 ### Stats Endpoints
 
-The stats endpoints have three forms:
-1. `/stats` - Returns the authenticated user's own stats
-2. `/stats/:user_id` - Returns stats for the specified user (ADMIN only)
-3. `/all-stats` - Returns stats for all users in the system (ADMIN only)
+The stats endpoints provide usage statistics:
 
-Returns JSON with the following structure:
+1. `/stats` - Returns the authenticated user's own stats (HACKER or ADMIN role)
+2. `/total-stats` - Returns stats for all users in the system (ADMIN only)
+
+Stats response format:
+
+```
+
 ```
