@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Executor;
 
 use crate::conf;
+use crate::types::UserStats;
 
 const MIGRATIONS: [&str; 1] = [include_str!("../migrations/0_data.sql")];
 
@@ -98,6 +99,68 @@ impl Storage {
         let tx = tokens_consume(tx, uid, now, requested_amount).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn get_user_stats(&self, uid: &str) -> anyhow::Result<UserStats> {
+        let mut conn = self.pool.acquire().await?;
+        
+        // Get hits data
+        let hits: Option<HitsRow> = sqlx::query_as(
+            "SELECT uid, count_of_all, time_of_last 
+             FROM hits 
+             WHERE uid = ?",
+        )
+        .bind(uid)
+        .fetch_optional(&mut *conn)
+        .await?;
+
+        let (total_hits, last_hit_time) = hits
+            .map(|h| (h.count_of_all, h.time_of_last))
+            .unwrap_or((0, 0));
+
+        // Get today's token usage
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let tokens: Option<TokensRow> = sqlx::query_as(
+            "SELECT uid, date, total 
+             FROM tokens 
+             WHERE uid = ? AND date = ?",
+        )
+        .bind(uid)
+        .bind(&today)
+        .fetch_optional(&mut *conn)
+        .await?;
+
+        let tokens_used_today = tokens
+            .map(|t| t.total)
+            .unwrap_or(0);
+
+        Ok(UserStats {
+            uid: uid.to_string(),
+            total_hits,
+            last_hit_time,
+            tokens_used_today,
+        })
+    }
+
+    pub async fn get_all_user_stats(&self) -> anyhow::Result<Vec<UserStats>> {
+        let mut conn = self.pool.acquire().await?;
+        
+        // Get all unique users from hits table
+        let users: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT uid FROM hits"
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+
+        // Get stats for each user
+        let mut all_stats = Vec::new();
+        for uid in users {
+            if let Ok(stats) = self.get_user_stats(&uid).await {
+                all_stats.push(stats);
+            }
+        }
+
+        Ok(all_stats)
     }
 }
 

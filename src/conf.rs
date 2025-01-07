@@ -84,7 +84,7 @@ impl Default for Jwt {
 impl Debug for Jwt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("conf::Jwt")
-            .field("secret", &"<XXXXX>")
+            .field("secret", &"super-secret")
             .field("audience", &self.audience)
             .field("issuer", &self.issuer)
             .finish()
@@ -141,3 +141,11 @@ pub fn read_or_create_default_<P: AsRef<Path>>(
     };
     Ok(conf)
 }
+
+
+
+
+
+
+
+
