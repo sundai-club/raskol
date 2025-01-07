@@ -141,6 +141,27 @@ impl Storage {
             tokens_used_today,
         })
     }
+
+    pub async fn get_all_user_stats(&self) -> anyhow::Result<Vec<UserStats>> {
+        let mut conn = self.pool.acquire().await?;
+        
+        // Get all unique users from hits table
+        let users: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT uid FROM hits"
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+
+        // Get stats for each user
+        let mut all_stats = Vec::new();
+        for uid in users {
+            if let Ok(stats) = self.get_user_stats(&uid).await {
+                all_stats.push(stats);
+            }
+        }
+
+        Ok(all_stats)
+    }
 }
 
 pub async fn hit<'a>(

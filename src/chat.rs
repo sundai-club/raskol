@@ -1,4 +1,6 @@
-#[derive(serde::Serialize, serde::Deserialize)]
+use utoipa::ToSchema;
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 pub struct Req {
     pub model: String,
     pub messages: Vec<Msg>,
@@ -10,7 +12,7 @@ impl Req {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 pub struct Msg {
     pub role: String,
     pub content: String,

@@ -1,4 +1,6 @@
-#[derive(serde::Serialize)]
+use utoipa::ToSchema;
+
+#[derive(serde::Serialize, ToSchema)]
 pub struct UserStats {
     pub uid: String,
     pub total_hits: u64,

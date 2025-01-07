@@ -18,6 +18,10 @@ use crate::{
     types::UserStats,
 };
 
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
+use crate::docs::ApiDoc;
+
 #[tracing::instrument(name = "server", skip_all)]
 pub async fn run() -> anyhow::Result<()> {
     let conf = conf::global();
@@ -26,11 +30,13 @@ pub async fn run() -> anyhow::Result<()> {
     let addr = SocketAddr::from((conf.addr, conf.port));
     let storage = Storage::connect().await?;
     let routes = axum::Router::new()
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .nest(
             "/",
             axum::Router::new()
                 .route("/ping", get(handle_ping))
                 .route("/stats", get(stats_handler))
+                .route("/total-stats", get(total_stats_handler))
                 .route(
                     "/*endpoint",
                     axum::routing::post({
@@ -108,6 +114,17 @@ pub async fn run() -> anyhow::Result<()> {
         role = USER.get().role
     )
 )]
+#[utoipa::path(
+    get,
+    path = "/ping",
+    responses(
+        (status = 200, description = "Ping successful", body = String),
+        (status = 403, description = "Unauthorized role"),
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
 async fn handle_ping(
     ConnectInfo(from): ConnectInfo<SocketAddr>,
 ) -> Result<&'static str, StatusCode> {
@@ -130,6 +147,26 @@ async fn handle_ping(
         uid = USER.get().uid,
         role = USER.get().role
     )
+)]
+#[utoipa::path(
+    post,
+    path = "/{endpoint}",
+    params(
+        ("endpoint" = String, Path, description = "The LLM endpoint path (e.g., 'openai/v1/chat/completions')")
+    ),
+    request_body = Req,
+    responses(
+        (status = 200, description = "Chat completion successful", content_type = "application/json"),
+        (status = 401, description = "Missing or invalid JWT token"),
+        (status = 403, description = "Unauthorized role"),
+        (status = 429, description = "Rate limit exceeded or token budget exceeded"),
+        (status = 500, description = "Internal server error"),
+        (status = 503, description = "Service unavailable - External LLM service error")
+    ),
+    security(
+        ("jwt" = [])
+    ),
+    tag = "chat"
 )]
 async fn handle_api(
     storage: Storage,
@@ -263,6 +300,18 @@ async fn handle_api(
         role = USER.get().role
     )
 )]
+#[utoipa::path(
+    get,
+    path = "/stats",
+    responses(
+        (status = 200, description = "User stats retrieved successfully", body = UserStats),
+        (status = 403, description = "Unauthorized role"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
 pub async fn stats_handler(
     State(storage): State<Storage>,
     ConnectInfo(from): ConnectInfo<SocketAddr>,
@@ -281,6 +330,50 @@ pub async fn stats_handler(
         .await
         .map_err(|error| {
             tracing::error!(?error, "Failed to get user stats.");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(stats))
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid,
+        role = USER.get().role
+    )
+)]
+#[utoipa::path(
+    get,
+    path = "/total-stats",
+    responses(
+        (status = 200, description = "All user stats retrieved successfully", body = Vec<UserStats>),
+        (status = 403, description = "Not an admin"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
+async fn total_stats_handler(
+    State(storage): State<Storage>,
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
+) -> Result<Json<Vec<UserStats>>, StatusCode> {
+    let user: User = USER.get();
+    
+    // Only allow ADMIN role
+    if user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Non-admin user attempted to view total stats.");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    tracing::info!(?from, "Handling total stats request from admin {}.", user.uid);
+    
+    let stats = storage.get_all_user_stats()
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to get all user stats.");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -315,11 +408,17 @@ async fn auth_layer(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let conf: Arc<Conf> = conf::global();
-    let auth_token = req
+    let auth_header = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Extract token from "Bearer <token>" format
+    let auth_token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
     if let Some(user) = authorize(auth_token, &conf.jwt) {
         Ok(USER.scope(user, next.run(req)).await)
     } else {
