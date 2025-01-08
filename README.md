@@ -24,7 +24,7 @@ Share 1 API key with N group members without revealing it. Raskol acts as a prox
    ```toml
    log_level = "INFO"  # or DEBUG, WARN, ERROR
    addr = "127.0.0.1"  # IP to bind to
-   port = 3001         # Port to listen on
+   port = 8080         # Port to listen on
 
    # JWT configuration for authentication
    [jwt]
@@ -70,13 +70,13 @@ Share 1 API key with N group members without revealing it. Raskol acts as a prox
 To make requests through the proxy:
 
 1. Use the JWT token as a Bearer token in the Authorization header
-2. Make POST requests to `http://localhost:3001/<endpoint>`
+2. Make POST requests to `http://localhost:8080/<endpoint>`
 3. The request will be forwarded to `https://<target_address>/<endpoint>`
 
 Example using curl:
 
 ```
-curl -i http://localhost:3001/openai/v1/chat/completions \
+curl -i http://localhost:8080/openai/v1/chat/completions \
   -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsImNhdCI6ImNsX0I3ZDRQRDIyMkFBQSIsInR5cCI6IkpXVCJ9.eyJhcHBfbWV0YWRhdGEiOnt9LCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZW1haWwiOiJjZGlya3M0K3Rlc3RAbWUuY29tIiwiZXhwIjoxNzM2ODgwNjUzLCJpYXQiOjE3MzYyODA2NTMsImlzcyI6Imh0dHBzOi8vYnJpZ2h0LWtpdHRlbi00MS5jbGVyay5hY2NvdW50cy5kZXYiLCJqdGkiOiIyNWQ3YTEwNDc2ZTUzNTkyM2E3OSIsIm5iZiI6MTczNjI4MDY0OCwicm9sZSI6IkhBQ0tFUiIsInN1YiI6InVzZXJfMnJKYTNxaW50TXU0Vm1lVEdIVlhXNVdqWGEzIiwidXNlcl9tZXRhZGF0YSI6e319.09TVUm3zFRYqjHJhtlknknVhOPtclDwUlK6X6MHTSwg' \
   -H 'Content-Type: application/json' \
   -X POST \
@@ -102,7 +102,7 @@ Users without these roles will receive a 403 Forbidden response when attempting 
 
 The API documentation is available through a Swagger UI interface at:
 
-`http://localhost:3001/swagger-ui`
+`http://localhost:8080/swagger-ui`
 
 This interactive documentation allows you to:
 
@@ -130,4 +130,88 @@ Stats response format:
 
 ```
 
+```
+
+## Deploying to fly.io
+
+1. Install the flyctl CLI:
+
+   ```bash
+   curl -L https://fly.io/install.sh | sh
+   ```
+
+2. Login to fly.io:
+
+   ```bash
+   fly auth login
+   ```
+
+3. Create a new fly.io app:
+
+   ```bash
+   fly launch
+   ```
+
+4. Create a `Dockerfile`:
+
+   ```dockerfile
+   FROM rust:1.75-slim-bookworm as builder
+   WORKDIR /usr/src/raskol
+   COPY . .
+   RUN cargo build --release
+
+   FROM debian:bookworm-slim
+   COPY --from=builder /usr/src/raskol/target/release/raskol /usr/local/bin/
+   COPY --from=builder /usr/src/raskol/conf/conf.toml /etc/raskol/
+   CMD ["raskol", "server"]
+   ```
+
+5. Create a `fly.toml`:
+
+   ```toml
+   app = "your-app-name"
+   primary_region = "dfw"
+
+   [build]
+   dockerfile = "Dockerfile"
+
+   [http_service]
+   internal_port = 8080
+   force_https = true
+   auto_stop_machines = true
+   auto_start_machines = true
+   min_machines_running = 1
+   processes = ["app"]
+
+   [[http_service.ports]]
+   port = 80
+   handlers = ["http"]
+   force_https = true
+
+   [[http_service.ports]]
+   port = 443
+   handlers = ["tls", "http"]
+   ```
+
+6. Set your configuration secrets:
+
+   ```bash
+   fly secrets set JWT_SECRET="your-secure-secret"
+   fly secrets set TARGET_AUTH_TOKEN="your-api-key"
+   ```
+
+7. Deploy:
+   ```bash
+   fly deploy
+   ```
+
+Your API will be available at `https://your-app-name.fly.dev`.
+
+Note: Make sure to update your `conf.toml` to use environment variables for sensitive data:
+
+```toml
+[jwt]
+secret = "${JWT_SECRET}"
+
+target_auth_token = "${TARGET_AUTH_TOKEN}"
 ```

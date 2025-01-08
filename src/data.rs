@@ -42,7 +42,9 @@ pub struct Storage {
 
 impl Storage {
     pub async fn connect() -> anyhow::Result<Self> {
-        let file_path = PathBuf::from("data/data.db");
+        let conf = conf::global();
+        let data_dir = PathBuf::from(&conf.data_dir);
+        let file_path = data_dir.join("data.db");
         if let Some(parent) = file_path.parent() {
             let ctx = format!(
                 "Failed to create parent directory \
@@ -51,7 +53,7 @@ impl Storage {
             fs::create_dir_all(parent).context(ctx)?;
         }
         let busy_timeout =
-            Duration::from_secs_f32(conf::global().sqlite_busy_timeout);
+            Duration::from_secs_f32(conf.sqlite_busy_timeout);
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(file_path)
             .create_if_missing(true)
