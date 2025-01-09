@@ -36,6 +36,7 @@ pub struct Conf {
     pub min_hit_interval: f32,
     pub max_tokens_per_day: u64,
     pub sqlite_busy_timeout: f32,
+    pub data_dir: String,
     pub tls: Option<Tls>,
 }
 
@@ -43,16 +44,17 @@ impl Default for Conf {
     fn default() -> Self {
         Self {
             log_level: tracing::Level::INFO,
-            addr: "127.0.0.1".parse().unwrap_or_else(|_| {
+            addr: "0.0.0.0".parse().unwrap_or_else(|_| {
                 unreachable!("Fat-fingered default IP address!")
             }),
-            port: 3001,
+            port: 8080,
             jwt: Jwt::default(),
             target_address: "api.groq.com".to_string(),
             target_auth_token: String::new(),
             min_hit_interval: 5.0,
             max_tokens_per_day: 1_000_000, // TODO Revise.
             sqlite_busy_timeout: 60.0,
+            data_dir: String::new(),
             tls: None,
         }
     }
@@ -84,7 +86,7 @@ impl Default for Jwt {
 impl Debug for Jwt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("conf::Jwt")
-            .field("secret", &"<XXXXX>")
+            .field("secret", &"super-secret")
             .field("audience", &self.audience)
             .field("issuer", &self.issuer)
             .finish()
@@ -115,6 +117,15 @@ where
 }
 
 pub fn read_or_create_default() -> anyhow::Result<Conf> {
+    // First try the environment-specified config path
+    if let Ok(path) = std::env::var("RASKOL_CONF") {
+        let s = fs::read_to_string(&path)
+            .context(format!("Failed to read config from {}", path))?;
+        return toml::from_str(&s)
+            .context(format!("Failed to parse config from {}", path));
+    }
+
+    // Fall back to local config for development
     let path = "conf/conf.toml";
     read_or_create_default_(path).context(path)
 }
@@ -141,3 +152,11 @@ pub fn read_or_create_default_<P: AsRef<Path>>(
     };
     Ok(conf)
 }
+
+
+
+
+
+
+
+

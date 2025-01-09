@@ -7,7 +7,8 @@ use super::jwt;
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
 pub struct Claims {
     pub sub: String,
-    exp: u64,
+    pub exp: u64,
+    pub role: String,
 }
 
 impl Claims {
@@ -15,7 +16,8 @@ impl Claims {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
         let exp = now.saturating_add(ttl).as_secs();
         let sub = sub.to_string();
-        Ok(Self { sub, exp })
+        let role = "HACKER".to_string();
+        Ok(Self { sub, exp, role })
     }
 
     pub fn to_str(&self, jwt_conf: &conf::Jwt) -> jwt::Result<String> {
