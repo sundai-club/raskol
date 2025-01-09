@@ -1,0 +1,5 @@
+# flyctl launch added from .gitignore
+bin/raskol
+cert
+data
+fly.toml

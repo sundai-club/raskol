@@ -1,56 +1,129 @@
-use std::{env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{env, net::SocketAddr, path::PathBuf};
 
 use anyhow::{anyhow, Context};
 use axum::{
-    extract::{ConnectInfo, Path, Request},
+    extract::{ConnectInfo, Path, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{Response, Result},
     routing::get,
     Json,
+    body::{Body, Bytes},
 };
 
 use crate::{
-    auth, chat,
-    conf::{self, Conf},
+    auth,
+    chat,
+    conf,
     data::Storage,
+    types::UserStats,
+    data::UsageStats,
 };
+
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
+use crate::docs::ApiDoc;
+use tower_http::cors::CorsLayer;
+use axum::http::Method;
+use reqwest::Client;
+
+const MAX_BODY_SIZE: usize = 1024 * 1024 * 10; // 10MB limit
+
+#[derive(Debug)]
+pub struct ApiError(StatusCode, Json<ErrorResponse>);
+
+impl From<StatusCode> for ApiError {
+    fn from(status: StatusCode) -> Self {
+        ApiError(status, Json(ErrorResponse {
+            error: status.canonical_reason().unwrap_or("Unknown error").to_string(),
+            details: None,
+        }))
+    }
+}
+
+impl From<(StatusCode, Json<ErrorResponse>)> for ApiError {
+    fn from((status, error): (StatusCode, Json<ErrorResponse>)) -> Self {
+        ApiError(status, error)
+    }
+}
+
+impl axum::response::IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let ApiError(status, body) = self;
+        (status, body).into_response()
+    }
+}
 
 #[tracing::instrument(name = "server", skip_all)]
 pub async fn run() -> anyhow::Result<()> {
     let conf = conf::global();
     let dir = env::current_dir()?;
-    tracing::info!(?dir, ?conf, "Starting.");
+    
+    // Ensure data_dir is relative to current directory if not absolute
+    let data_dir = if conf.data_dir.starts_with('/') {
+        PathBuf::from(&conf.data_dir)
+    } else {
+        dir.join(&conf.data_dir)
+    };
+    
+    let db_path = data_dir.join("data.db");
+    tracing::info!(?dir, ?conf, data_dir = ?data_dir, db_path = ?db_path, "Starting.");
     let addr = SocketAddr::from((conf.addr, conf.port));
+    
+    // Create data directory if it doesn't exist
+    tokio::fs::create_dir_all(&data_dir).await
+        .context("Failed to create data directory")?;
+    
     let storage = Storage::connect().await?;
+    let state = AppState { storage };
+    
+    let cors = CorsLayer::new()
+        .allow_origin([
+            "http://localhost:3000".parse().unwrap(),
+            "https://localhost:3000".parse().unwrap(),
+            format!("http://{}:{}", conf.addr, conf.port).parse().unwrap(),
+            format!("https://{}:{}", conf.addr, conf.port).parse().unwrap(),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            header::ORIGIN,
+        ])
+        .allow_credentials(true)
+        .expose_headers([
+            header::CONTENT_TYPE,
+            header::CONTENT_LENGTH,
+        ]);
     let routes = axum::Router::new()
-        .route("/ping", get(handle_ping))
+        .route("/health", get(health_check))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .layer(cors)
         .nest(
             "/",
             axum::Router::new()
+                .route("/ping", get(handle_ping))
+                .route("/stats", get(stats_handler))
+                .route("/total-stats", get(total_stats_handler))
                 .route(
                     "/*endpoint",
-                    axum::routing::post({
-                        let storage = storage.clone();
-                        move |conn_info, endpoint, payload| {
-                            handle_api(storage, conn_info, endpoint, payload)
-                        }
-                    }),
+                    axum::routing::post(handle_api),
                 )
-                .route_layer(middleware::from_fn({
-                    |req, next: Next| auth_layer(req, next)
-                })),
+                .route_layer(middleware::from_fn(auth_layer)),
         )
         .route_layer(middleware::from_fn({
             |req, next: Next| REQ_ID.scope(ReqId::new(), next.run(req))
         }))
-        .into_make_service_with_connect_info::<SocketAddr>();
+        .with_state(state);
+
+    let service = routes.into_make_service_with_connect_info::<SocketAddr>();
 
     match &conf.tls {
         None => {
             let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::warn!(?addr, "Listening unencrypted.");
-            axum::serve(listener, routes).await?;
+            axum::serve(listener, service).await?;
         }
         Some(conf::Tls {
             cert_file,
@@ -86,7 +159,9 @@ pub async fn run() -> anyhow::Result<()> {
                 ?key_file,
                 "Listening with TLS."
             );
-            axum_server::bind_rustls(addr, config).serve(routes).await?;
+            axum_server::bind_rustls(addr, config)
+                .serve(service)
+                .await?;
         }
     }
 
@@ -95,143 +170,234 @@ pub async fn run() -> anyhow::Result<()> {
 
 #[tracing::instrument(
     skip_all,
-    fields(req_id = REQ_ID.get().req_id)
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid,
+        role = USER.get().role
+    )
+)]
+#[utoipa::path(
+    get,
+    path = "/ping",
+    responses(
+        (status = 200, description = "Ping successful", body = String),
+        (status = 403, description = "Unauthorized role"),
+    ),
+    security(
+        ("jwt" = [])
+    )
 )]
 async fn handle_ping(
     ConnectInfo(from): ConnectInfo<SocketAddr>,
-) -> StatusCode {
+) -> Result<&'static str, ApiError> {
+    let user: User = USER.get();
+    
+    if user.role != "HACKER" && user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Unauthorized role attempted to ping.");
+        return Err(StatusCode::FORBIDDEN.into());
+    }
+
     tracing::info!(?from, "Handling ping request.");
-    StatusCode::OK
+    Ok("pong")
 }
 
 #[tracing::instrument(
     skip_all,
     fields(
         req_id = REQ_ID.get().req_id,
-        uid = USER.get().uid
+        uid = USER.get().uid,
+        role = USER.get().role
     )
 )]
-async fn handle_api(
-    storage: Storage,
-    ConnectInfo(from): ConnectInfo<SocketAddr>,
+#[utoipa::path(
+    post,
+    path = "/{endpoint}",
+    params(
+        ("endpoint" = String, Path, description = "The LLM endpoint path (e.g., 'openai/v1/chat/completions')")
+    ),
+    request_body = Req,
+    responses(
+        (status = 200, description = "Chat completion successful", content_type = "application/json"),
+        (status = 401, description = "Missing or invalid JWT token"),
+        (status = 403, description = "Unauthorized role"),
+        (status = 429, description = "Rate limit exceeded or token budget exceeded"),
+        (status = 500, description = "Internal server error"),
+        (status = 503, description = "Service unavailable - External LLM service error")
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
+pub async fn handle_api(
+    State(state): State<AppState>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     Path(endpoint): Path<String>,
-    Json(chat_req): Json<chat::Req>,
-) -> Result<Response<String>, StatusCode> {
-    tracing::info!(?from, "Handling API request.");
+    request: Request<Body>,
+) -> Result<Response<Body>> {
     let conf = conf::global();
-    let user: User = USER.get();
+    let (_parts, body) = request.into_parts();
+    let bytes = axum::body::to_bytes(body, MAX_BODY_SIZE).await.map_err(|e| {
+        tracing::error!(error = ?e, "Failed to read request body");
+        status_to_error(StatusCode::BAD_REQUEST)
+    })?;
 
-    //
-    // Rate Limit
-    //
-    let _token_count = chat_req.tokens_estimate();
-    let (hit_count, elapsed_since_prev) =
-        storage.hit(&user.uid).await.map_err(|error| {
-            tracing::error!(?error, "Failed to hit storage.");
-            StatusCode::SERVICE_UNAVAILABLE
+    // Parse the request body
+    let chat_request: chat::Req = serde_json::from_slice(&bytes).map_err(|e| {
+        tracing::error!(error = ?e, "Failed to parse request body");
+        status_to_error(StatusCode::BAD_REQUEST)
+    })?;
+
+    // Get user info for tracking
+    let user = USER.get();
+    
+    // Check token budget
+    let tokens_estimate = chat_request.tokens_estimate();
+    if !state.storage.tokens_check(&user.uid, tokens_estimate).await? {
+        return Err(status_to_error(StatusCode::TOO_MANY_REQUESTS));
+    }
+
+    // Create reqwest client
+    let client = Client::new();
+    
+    // Construct target URL
+    let target_url = format!("https://{}/{}", conf.target_address, endpoint);
+    
+    tracing::debug!(?target_url, "Forwarding request to target service");
+
+    // Forward the request
+    let response = client
+        .post(&target_url)
+        .header("Authorization", format!("Bearer {}", conf.target_auth_token))
+        .header("Content-Type", "application/json")
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to forward request");
+            status_to_error(StatusCode::BAD_GATEWAY)
         })?;
-    let min_hit_interval = Duration::from_secs_f32(conf.min_hit_interval);
-    tracing::debug!(
-        hit_count,
-        ?elapsed_since_prev,
-        ?min_hit_interval,
-        "Checking interval."
-    );
-    if elapsed_since_prev < min_hit_interval {
-        tracing::warn!("Rejecting. Too close to previous request.");
-        // TODO Explain reason in response body.
-        return Err(StatusCode::TOO_MANY_REQUESTS);
-    };
 
-    //
-    // Token Budget:
-    // 1. check if enough in budget
-    // 2. make request
-    // 3. consume from budget
-    //
-    let token_count = chat_req.tokens_estimate();
-    let is_enough_tokens_in_budget = storage
-        .tokens_check(&user.uid, token_count)
+    // Get status and body
+    let status = response.status();
+    let body_bytes = response.bytes().await.map_err(|e| {
+        tracing::error!(error = ?e, "Failed to read response body");
+        status_to_error(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+
+    // If request was successful, consume tokens
+    if status.is_success() {
+        if let Err(e) = state.storage.tokens_consume(&user.uid, tokens_estimate).await {
+            tracing::error!(error = ?e, "Failed to consume tokens");
+        }
+    }
+
+    // Convert response back to axum response
+    Ok(Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json")
+        .body(Body::from(body_bytes))
+        .map_err(|e| {
+            tracing::error!(error = ?e, "Failed to create response");
+            status_to_error(StatusCode::INTERNAL_SERVER_ERROR)
+        })?)
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid,
+        role = USER.get().role
+    )
+)]
+#[utoipa::path(
+    get,
+    path = "/stats",
+    responses(
+        (status = 200, description = "User stats retrieved successfully", body = UserStats),
+        (status = 403, description = "Unauthorized role"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
+pub async fn stats_handler(
+    State(state): State<AppState>,
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
+) -> Result<Json<UserStats>, StatusCode> {
+    let user: User = USER.get();
+    
+    // Allow both HACKER and ADMIN roles
+    if user.role != "HACKER" && user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Unauthorized role attempted to view stats.");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    tracing::info!(?from, "Handling stats request for user {}.", user.uid);
+    
+    let stats = state.storage.get_user_stats(&user.uid)
         .await
         .map_err(|error| {
-            tracing::error!(?error, "Failed to hit storage.");
-            StatusCode::SERVICE_UNAVAILABLE
+            tracing::error!(?error, "Failed to get user stats.");
+            StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    if !is_enough_tokens_in_budget {
-        tracing::warn!("Rejecting. Token budget exceeded.");
-        // TODO Explain reason in response body.
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+
+    Ok(Json(stats))
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        req_id = REQ_ID.get().req_id,
+        uid = USER.get().uid,
+        role = USER.get().role
+    )
+)]
+#[utoipa::path(
+    get,
+    path = "/total-stats",
+    responses(
+        (status = 200, description = "All user stats retrieved successfully", body = Vec<UserStats>),
+        (status = 403, description = "Not an admin"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
+async fn total_stats_handler(
+    State(state): State<AppState>,
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
+) -> Result<Json<Vec<UserStats>>, StatusCode> {
+    let user: User = USER.get();
+    
+    // Only allow ADMIN role
+    if user.role != "ADMIN" {
+        tracing::warn!(user_role = ?user.role, "Non-admin user attempted to view total stats.");
+        return Err(StatusCode::FORBIDDEN);
     }
 
-    let address = &conf.target_address;
-    let url = format!("https://{address}/{endpoint}");
-    let (client, out_req) = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&conf.target_auth_token)
-        .json(&chat_req)
-        .build_split();
-    let out_req = out_req.map_err(|error| {
-        tracing::error!(?error, "Failed to build outgoing request.");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    tracing::debug!(
-        out_headers = ?out_req.headers(),
-        out_body = ?out_req
-            .body()
-            .map(|b| b.as_bytes().map(|b| String::from_utf8_lossy(b))),
-        "Outgoing reqwest."
-    );
-    let resp = client.execute(out_req).await.map_err(|error| {
-        tracing::error!(?error, "Failed to make the external request.");
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
+    tracing::info!(?from, "Handling total stats request from admin {}.", user.uid);
+    
+    let stats = state.storage.get_all_user_stats()
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to get all user stats.");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    let status = resp.status();
-    let headers = resp.headers().to_owned();
-    let code = status.as_u16();
-    let code = StatusCode::from_u16(code).map_err(|error| {
-        tracing::error!(?error, ?code, "Failed to convert status code.");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let body = resp.text().await.map_err(|error| {
-        tracing::error!(
-            ?error,
-            ?code,
-            "Failed to receive body from target host."
-        );
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
-    if !status.is_success() {
-        tracing::error!(
-            ?status,
-            ?headers,
-            ?body,
-            "External request rejected."
-        );
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
-    // XXX If tokens_consume fails - we don't want to fail the request, so
-    //     we might end-up not consuming. May need to yell louder here. Alert?
-    if let Err(error) = storage.tokens_consume(&user.uid, token_count).await {
-        tracing::error!(?error, ?token_count, "Failed to consume tokens!");
-    }
-    if is_json(&body) {
-        Response::builder()
-            .status(code)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body)
-    } else {
-        Response::builder().status(code).body(body)
-    }
-    .map_err(|error| {
-        tracing::error!(?error, ?code, "Failed to build response.");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
+    Ok(Json(stats))
+}
+
+async fn health_check() -> &'static str {
+    "OK"
 }
 
 #[derive(Debug, Clone)]
 struct User {
     pub uid: String,
+    pub role: String,
 }
 
 #[derive(Debug, Clone)]
@@ -254,28 +420,92 @@ tokio::task_local! {
 async fn auth_layer(
     req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
-    let conf: Arc<Conf> = conf::global();
+) -> Result<Response, ApiError> {
+    let conf = conf::global();
+    
+    // Log the incoming request headers
+    tracing::debug!(headers = ?req.headers(), "Incoming request headers");
+    
     let auth_token = req
         .headers()
         .get(header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    if let Some(user) = authorize(auth_token, &conf.jwt) {
-        Ok(USER.scope(user, next.run(req)).await)
-    } else {
-        tracing::debug!(?req, "Invalid or missing authorization.");
-        Err(StatusCode::UNAUTHORIZED)
+        .ok_or_else(|| {
+            tracing::warn!("Missing Authorization header");
+            StatusCode::UNAUTHORIZED
+        })?
+        .to_str()
+        .map_err(|e| {
+            tracing::warn!(error = ?e, "Invalid Authorization header encoding");
+            StatusCode::UNAUTHORIZED
+        })?
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| {
+            tracing::warn!("Authorization header missing 'Bearer ' prefix");
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    tracing::debug!(token_length = auth_token.len(), "Received auth token");
+
+    match authorize(auth_token, &conf.jwt) {
+        Some(user) => {
+            tracing::info!(
+                user_id = ?user.uid,
+                user_role = ?user.role,
+                "User authenticated successfully"
+            );
+            Ok(USER.scope(user, next.run(req)).await)
+        }
+        None => {
+            tracing::warn!(
+                token_prefix = ?auth_token.get(..10).unwrap_or(""),
+                "Authentication failed"
+            );
+            Err(StatusCode::UNAUTHORIZED.into())
+        }
     }
 }
 
 fn authorize(auth_token: &str, jwt_conf: &conf::Jwt) -> Option<User> {
+    tracing::debug!(
+        audience = ?jwt_conf.audience,
+        issuer = ?jwt_conf.issuer,
+        "Attempting to validate JWT"
+    );
+    
     auth::Claims::from_str(auth_token, jwt_conf)
-        .inspect_err(|error| tracing::debug!(?error, "Auth failed."))
+        .inspect_err(|error| {
+            tracing::warn!(
+                ?error,
+                token_prefix = ?auth_token.get(..10).unwrap_or(""),
+                "JWT validation failed"
+            );
+        })
         .ok()
-        .map(|claims| User { uid: claims.sub })
+        .map(|claims| {
+            tracing::debug!(
+                subject = ?claims.sub,
+                role = ?claims.role,
+                "JWT claims parsed successfully"
+            );
+            User { 
+                uid: claims.sub,
+                role: claims.role,
+            }
+        })
 }
 
-fn is_json(s: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(s).is_ok()
+#[derive(Debug, serde::Serialize)]
+struct ErrorResponse {
+    error: String,
+    details: Option<String>,
 }
+
+fn status_to_error(status: StatusCode) -> ApiError {
+    status.into()
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub storage: Storage,
+}
+
