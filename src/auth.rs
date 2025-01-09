@@ -9,6 +9,10 @@ pub struct Claims {
     pub sub: String,
     pub exp: u64,
     pub role: String,
+    pub iss: String,
+    pub aud: String,
+    pub iat: u64,
+    pub nbf: Option<u64>,
 }
 
 impl Claims {
@@ -17,7 +21,7 @@ impl Claims {
         let exp = now.saturating_add(ttl).as_secs();
         let sub = sub.to_string();
         let role = "HACKER".to_string();
-        Ok(Self { sub, exp, role })
+        Ok(Self { sub, exp, role, iss: "".to_string(), aud: "".to_string(), iat: 0, nbf: None })
     }
 
     pub fn to_str(&self, jwt_conf: &conf::Jwt) -> jwt::Result<String> {
@@ -25,7 +29,22 @@ impl Claims {
     }
 
     pub fn from_str(str: &str, jwt_conf: &conf::Jwt) -> jwt::Result<Self> {
-        jwt::decode::<Self>(str, jwt_conf)
+        let claims = jwt::decode::<Self>(str, jwt_conf)?;
+        
+        if claims.iss != jwt_conf.issuer || claims.aud != jwt_conf.audience {
+            tracing::warn!(
+                expected_issuer = ?jwt_conf.issuer,
+                actual_issuer = ?claims.iss,
+                expected_audience = ?jwt_conf.audience,
+                actual_audience = ?claims.aud,
+                "JWT issuer or audience mismatch"
+            );
+            return Err(jsonwebtoken::errors::Error::from(
+                jsonwebtoken::errors::ErrorKind::InvalidIssuer
+            ));
+        }
+        
+        Ok(claims)
     }
 }
 

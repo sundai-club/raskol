@@ -54,7 +54,7 @@ fn setup_conf(workdir: &Path) -> raskol::conf::Conf {
     let (cert_file, key_file) = setup_cert(workdir);
     let conf = raskol::conf::Conf {
         log_level: tracing::Level::INFO,
-        addr: "127.0.0.1".parse().unwrap(),
+        addr: "0.0.0.0".parse().unwrap(),
         port: 7000,
         jwt: raskol::conf::Jwt {
             secret: "fake-secret".to_string(),

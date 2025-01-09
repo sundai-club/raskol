@@ -35,6 +35,17 @@ struct TokensRow {
     total: u64,
 }
 
+#[derive(Debug)]
+pub struct UsageStats {
+    pub queue_time_ms: i64,
+    pub prompt_time_ms: i64,
+    pub completion_time_ms: i64,
+    pub total_time_ms: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+}
+
 #[derive(Clone)]
 pub struct Storage {
     pool: sqlx::Pool<sqlx::Sqlite>,
@@ -164,6 +175,73 @@ impl Storage {
 
         Ok(all_stats)
     }
+
+    pub async fn log_request(
+        &self,
+        uid: &str,
+        endpoint: &str,
+        model: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        status_code: i32,
+        duration_ms: i64,
+        error_message: Option<String>,
+        request_id: &str,
+        usage_stats: Option<UsageStats>,
+    ) -> anyhow::Result<()> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        sqlx::query(
+            r#"
+            INSERT INTO request_logs 
+            (uid, timestamp, endpoint, model, input_tokens, output_tokens, 
+             status_code, duration_ms, error_message, request_id,
+             queue_time_ms, prompt_time_ms, completion_time_ms, total_time_ms, total_tokens)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(uid)
+        .bind(timestamp)
+        .bind(endpoint)
+        .bind(model)
+        .bind(input_tokens)
+        .bind(output_tokens)
+        .bind(status_code)
+        .bind(duration_ms)
+        .bind(error_message)
+        .bind(request_id)
+        .bind(usage_stats.as_ref().map(|s| s.queue_time_ms))
+        .bind(usage_stats.as_ref().map(|s| s.prompt_time_ms))
+        .bind(usage_stats.as_ref().map(|s| s.completion_time_ms))
+        .bind(usage_stats.as_ref().map(|s| s.total_time_ms))
+        .bind(usage_stats.as_ref().map(|s| s.total_tokens))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_user_request_history(
+        &self,
+        uid: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<RequestLog>> {
+        sqlx::query_as::<_, RequestLog>(
+            r#"
+            SELECT * FROM request_logs 
+            WHERE uid = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+            "#
+        )
+        .bind(uid)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
 }
 
 pub async fn hit<'a>(
@@ -269,4 +347,19 @@ async fn tokens_consume<'a>(
     .execute(&mut *tx)
     .await?;
     Ok(tx)
+}
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+pub struct RequestLog {
+    pub id: i64,
+    pub uid: String,
+    pub timestamp: i64,
+    pub endpoint: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub status_code: i32,
+    pub duration_ms: i64,
+    pub error_message: Option<String>,
+    pub request_id: String,
 }

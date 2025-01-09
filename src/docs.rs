@@ -1,6 +1,7 @@
 use utoipa::OpenApi;
+use utoipa::openapi::security::HttpAuthScheme;
 use crate::types::UserStats;
-use crate::chat::{Req, Msg};
+use crate::chat::{Req, Msg, MsgContent, ContentItem, ImageUrl};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -11,7 +12,14 @@ use crate::chat::{Req, Msg};
         crate::server::handle_api,
     ),
     components(
-        schemas(UserStats, Req, Msg)
+        schemas(
+            UserStats, 
+            Req, 
+            Msg, 
+            MsgContent, 
+            ContentItem, 
+            ImageUrl
+        )
     ),
     modifiers(&SecurityAddon),
     tags(
@@ -20,7 +28,14 @@ use crate::chat::{Req, Msg};
     info(
         title = "Raskol API",
         version = "1.0",
-        description = "API for managing LLM access and usage statistics"
+        description = "API for managing LLM access and usage statistics",
+        contact(
+            name = "Connor Dirks & Siraaj Khandkar",
+            email = "cdirks4@me.com"
+        ),
+        license(
+            name = "BSD-3-Clause"
+        )
     )
 )]
 pub struct ApiDoc;
@@ -31,22 +46,14 @@ impl utoipa::Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         if let Some(components) = openapi.components.as_mut() {
             components.add_security_scheme(
-                "jwt", 
+                "jwt",
                 utoipa::openapi::security::SecurityScheme::Http(
                     utoipa::openapi::security::HttpBuilder::new()
-                        .scheme(utoipa::openapi::security::HttpAuthScheme::Bearer)
+                        .scheme(HttpAuthScheme::Bearer)
                         .bearer_format("JWT")
-                        .description(Some("Enter your JWT token here (without Bearer prefix)"))
-                        .build()
-                )
+                        .build(),
+                ),
             );
-            
-            // Add global security requirement with proper type conversions
-            let security_req = utoipa::openapi::SecurityRequirement::new::<String, Vec<String>, String>(
-                "jwt".to_string(), 
-                Vec::new()
-            );
-            openapi.security = Some(vec![security_req]);
         }
     }
 } 

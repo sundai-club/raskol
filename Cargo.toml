@@ -2,7 +2,10 @@
 name = "raskol"
 version = "0.10.1"
 description = "Share 1 API key with N group members without revealing it."
-authors = ["Siraaj Khandkar <siraaj@khandkar.net>"]
+authors = [
+    "Connor Dirks <cdirks4@me.com>",
+    "Siraaj Khandkar"
+]
 keywords = ["photo", "organizer", "exif"]
 categories = ["command-line-utilities"]
 license = "BSD-3-Clause"
@@ -31,6 +34,7 @@ tower-http = { version = "0.5", features = ["cors"] }
 utoipa = { version = "4.2.0", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "5.0.0", features = ["axum"] }
 idna = "=0.5.0"
+tiktoken = "1.0.1"
 
 [dev-dependencies]
 assert_cmd = "2.0.16"
